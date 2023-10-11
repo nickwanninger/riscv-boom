@@ -300,6 +300,13 @@ class AlaskaAddrCalcUnit(implicit p: Parameters) extends BoomModule {
     val bp       = if (true) Input(Vec(nBreakpoints, new BP)) else null
     val mcontext = if (true) Input(UInt(coreParams.mcontextWidth.W)) else null
     val scontext = if (true) Input(UInt(coreParams.scontextWidth.W)) else null
+
+
+    // If there is a resp, and this is true, the response
+    // from the LSU should be routed back into this module.
+    val ll_iresp = Flipped(new DecoupledIO(new ExeUnitResp(64)))
+    val translating = Output(Bool())
+    // TODO: input for the MUX-ed response from the LSU
   })
 
   // Construct a memory address calculation unit, which internally checks alignment
@@ -325,6 +332,8 @@ class AlaskaAddrCalcUnit(implicit p: Parameters) extends BoomModule {
   maddrcalc.io.resp.ready := DontCare
 
   io.resp <> maddrcalc.io.resp
+
+  io.translating := false.B
 
 }
 

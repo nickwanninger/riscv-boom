@@ -409,14 +409,22 @@ class ALUExeUnit(
     alaska.io.resp.ready := DontCare
     require(numBypassStages == 0)
 
-
-    // Aux
     io.lsu_io.req := alaska.io.resp
 
-    io.ll_iresp <> io.lsu_io.iresp
+
+
+    when (alaska.io.translating) {
+      alaska.io.ll_iresp <> io.lsu_io.iresp
+    } .otherwise {
+      io.ll_iresp <> io.lsu_io.iresp
+    }
+
+    // TODO: figure out how the hell floating point loads are different
     if (usingFPU) {
       io.ll_fresp <> io.lsu_io.fresp
     }
+
+
 
     // object State extends ChiselEnum {
     //   // idle: Not translating handles (old pointer path)
