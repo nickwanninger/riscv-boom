@@ -19,6 +19,7 @@ import scala.collection.mutable.{ArrayBuffer}
 
 import chisel3._
 import chisel3.util._
+import chisel3.experimental.ChiselEnum
 
 import freechips.rocketchip.config.{Parameters}
 import freechips.rocketchip.rocket.{BP}
@@ -179,6 +180,9 @@ abstract class ExecutionUnit(
       ifpu = hasIfpu)
   }
 }
+
+
+
 
 /**
  * ALU execution unit that can have a branch, alu, mul, div, int to FP,
@@ -375,24 +379,81 @@ class ALUExeUnit(
 
   // Mem Unit --------------------------
   if (hasMem) {
+
+    // What parts are hooked up here?
+    // INPUT:
+    // - io.req
+    // - io.brupdate
+    // - io.status
+    // - io.bp
+    // - io.mcontext
+    // - io.scontext
+    //
+    // OUTPUT:
+    // - io.lsu_io.req := maddrcalc.io.resp
+    // - io.ll_iresp
+    // - io.ll_fresp
+
+    // the ALU *must* be disabled of we are a memory unit.
     require(!hasAlu)
-    val maddrcalc = Module(new MemAddrCalcUnit)
-    maddrcalc.io.req        <> io.req
-    maddrcalc.io.req.valid  := io.req.valid && io.req.bits.uop.fu_code_is(FU_MEM)
-    maddrcalc.io.brupdate     <> io.brupdate
-    maddrcalc.io.status     := io.status
-    maddrcalc.io.bp         := io.bp
-    maddrcalc.io.mcontext   := io.mcontext
-    maddrcalc.io.scontext   := io.scontext
-    maddrcalc.io.resp.ready := DontCare
+
+
+    val alaska = Module(new AlaskaAddrCalcUnit)
+    alaska.io.req        <> io.req
+    alaska.io.req.valid  := io.req.valid && io.req.bits.uop.fu_code_is(FU_MEM)
+    alaska.io.brupdate   <> io.brupdate
+    alaska.io.status     := io.status
+    alaska.io.bp         := io.bp
+    alaska.io.mcontext   := io.mcontext
+    alaska.io.scontext   := io.scontext
+    alaska.io.resp.ready := DontCare
     require(numBypassStages == 0)
 
-    io.lsu_io.req := maddrcalc.io.resp
+
+    // Aux
+    io.lsu_io.req := alaska.io.resp
 
     io.ll_iresp <> io.lsu_io.iresp
     if (usingFPU) {
       io.ll_fresp <> io.lsu_io.fresp
     }
+
+    // object State extends ChiselEnum {
+    //   // idle: Not translating handles (old pointer path)
+    //   // translating: The address was a handle, waiting on LSU to respond w/ translation
+    //   val idle, translating = Value
+    // }
+    // // Reset the state to the idle state
+    // val state = RegInit(State.idle)
+    // val addr = RegInit(0.U)
+    //
+    // val alaska = Module(new AlaskaMemUnit)
+    //
+    // alaska.io.req <> io.req
+    //
+    //
+    //
+    // when (io.req.valid) {
+    //   switch (state) {
+    //     // We are waiting on a handle
+    //     is(State.idle) {
+    //       // Compute the address the same way the `MemAddrCalcUnit` does.
+    //       addr := (io.req.bits.rs1_data.asSInt + io.req.bits.uop.imm_packed(19,8).asSInt).asUInt
+    //       // If the request is valid, and the top bit is set, do something special :)
+    //       when(io.req.valid && addr(63) && !addr(62)) {
+    //         printf("Handle %x\n", addr)
+    //         state := State.translating
+    //       } .otherwise {
+    //       }
+    //     }
+    //     // We are waiting on the translation to finish
+    //     is(State.translating) {
+    //     }
+    //   }
+    // }
+    //
+
+
   }
 
   // Outputs (Write Port #0)  ---------------

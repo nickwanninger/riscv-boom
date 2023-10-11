@@ -272,6 +272,62 @@ abstract class PipelinedFunctionalUnit(
   }
 }
 
+
+
+// This is the Alaska memory unit. It sits between the issue unit and the memory system, and
+// performs Alaska transformations by issuing requests directly to the LSU. If a non-handle
+// is passed to this unit, it should act identically to the original memory system.
+// TODO: what does it do if there is a handle passed?
+class AlaskaAddrCalcUnit(implicit p: Parameters) extends BoomModule {
+  val dataWidth = 65
+  val io = IO(new Bundle {
+    val req    = Flipped(new DecoupledIO(new FuncUnitReq(dataWidth)))
+    val resp   = (new DecoupledIO(new FuncUnitResp(dataWidth)))
+
+    val brupdate = Input(new BrUpdateInfo())
+
+    val bypass = Output(Vec(0, Valid(new ExeUnitResp(dataWidth))))
+
+    // only used by the fpu unit
+    val fcsr_rm = if (false) Input(UInt(tile.FPConstants.RM_SZ.W)) else null
+
+    // only used by branch unit
+    val brinfo     = if (false) Output(new BrResolutionInfo()) else null
+    val get_ftq_pc = if (false) Flipped(new GetPCFromFtqIO()) else null
+    val status     = if (true) Input(new freechips.rocketchip.rocket.MStatus()) else null
+
+    // only used by memaddr calc unit
+    val bp       = if (true) Input(Vec(nBreakpoints, new BP)) else null
+    val mcontext = if (true) Input(UInt(coreParams.mcontextWidth.W)) else null
+    val scontext = if (true) Input(UInt(coreParams.scontextWidth.W)) else null
+  })
+
+  // Construct a memory address calculation unit, which internally checks alignment
+  // and performs offsets.
+  val maddrcalc = Module(new MemAddrCalcUnit)
+  // The maddrcalc unit uses the same request format as this functional unit, so we
+  // will tie it in.
+  maddrcalc.io.req        <> io.req
+  // The request is only valid if the uOP is one that is meant for memory functional units
+  // TODO: this is also only valid if we aren't currently translating a handle
+  maddrcalc.io.req.valid  := io.req.valid && io.req.bits.uop.fu_code_is(FU_MEM)
+  // Tie in the branch predictor update
+  maddrcalc.io.brupdate   <> io.brupdate
+  // The FU also gets a copy (maybe?) of the status register at the point of that execution
+  maddrcalc.io.status     := io.status
+  // Tie in the breakpoints
+  maddrcalc.io.bp         := io.bp
+  // The FU also gets a copy (maybe) of the contexts (both m and s)
+  maddrcalc.io.mcontext   := io.mcontext
+  maddrcalc.io.scontext   := io.scontext
+
+  // Don't worry about the ready bit from the addr calc system.
+  maddrcalc.io.resp.ready := DontCare
+
+  io.resp <> maddrcalc.io.resp
+
+}
+
 /**
  * Functional unit that wraps RocketChips ALU
  *
@@ -467,6 +523,7 @@ class ALUUnit(isJmpUnit: Boolean = false, numStages: Int = 1, dataWidth: Int)(im
   io.resp.bits.fflags.valid := false.B
 }
 
+
 /**
  * Functional unit that passes in base+imm to calculate addresses, and passes store data
  * to the LSU.
@@ -488,7 +545,12 @@ class MemAddrCalcUnit(implicit p: Parameters)
                                        sum(63,vaddrBits) =/= 0.U)
   val effective_address = Cat(ea_sign, sum(vaddrBits-1,0)).asUInt
 
+  // when (effective_address === 0.U) {
+  //   effective_address := 
+  // }
+
   val store_data = io.req.bits.rs2_data
+
 
   io.resp.bits.addr := effective_address
   io.resp.bits.data := store_data
