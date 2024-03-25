@@ -238,6 +238,12 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer){
   ptw.io.requestor <> ptwPorts.toSeq
   ptw.io.mem +=: hellaCachePorts
 
+  // HTW
+  val htw = Module(new HTW)
+  core.io.htw <> htw.io.dpath
+  htw.io.requestor <> lsu.io.htw
+  htw.io.mem +=: hellaCachePorts
+
    // LSU IO
   val hellaCacheArb = Module(new HellaCacheArbiter(hellaCachePorts.length)(outer.p))
   hellaCacheArb.io.requestor <> hellaCachePorts.toSeq

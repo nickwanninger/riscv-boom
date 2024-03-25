@@ -43,6 +43,7 @@ import freechips.rocketchip.devices.tilelink.{PLICConsts, CLINTConsts}
 import boom.v4.common._
 import boom.v4.ifu.{GlobalHistory, HasBoomFrontendParameters}
 import boom.v4.util._
+import boom.v4.lsu.{DatapathHTWIO}
 
 /**
  * Top level core object that connects the Frontend to the rest of the pipeline.
@@ -57,6 +58,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     val interrupts = Input(new freechips.rocketchip.rocket.CoreInterrupts(false))
     val ifu = new boom.v4.ifu.BoomFrontendIO
     val ptw = Flipped(new freechips.rocketchip.rocket.DatapathPTWIO())
+    val htw = Flipped(new DatapathHTWIO())
     val rocc = Flipped(new freechips.rocketchip.tile.RoCCCoreIO())
     val lsu = Flipped(new boom.v4.lsu.LSUCoreIO)
     val ptw_tlb = new freechips.rocketchip.rocket.TLBPTWIO()
@@ -1349,6 +1351,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   coreMonitorBundle.clock  := clock
   coreMonitorBundle.reset  := reset
 
+
+  io.htw.htBase := custom_csrs.htBase
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------
