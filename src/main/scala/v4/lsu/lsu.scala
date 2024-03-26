@@ -175,7 +175,7 @@ class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
 class LDQEntry(implicit p: Parameters) extends BoomBundle()(p)
     with HasBoomUOP
 {
-  val addr                = Valid(UInt(64.W))
+  val addr                = Valid(UInt(xLen.W))
   val addr_is_virtual     = Bool() // Virtual address, we got a TLB miss
   val addr_is_uncacheable = Bool() // Uncacheable, wait until head of ROB to execute
 
@@ -197,7 +197,7 @@ class LDQEntry(implicit p: Parameters) extends BoomBundle()(p)
 class STQEntry(implicit p: Parameters) extends BoomBundle()(p)
    with HasBoomUOP
 {
-  val addr                = Valid(UInt(64.W))
+  val addr                = Valid(UInt(xLen.W))
   val addr_is_virtual     = Bool() // Virtual address, we got a TLB miss
   val data                = Valid(UInt(xLen.W))
 
@@ -218,7 +218,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   //val ldq                 = Reg(Vec(numLdqEntries, Valid(new LDQEntry)))
   val ldq_valid               = Reg(Vec(numLdqEntries, Bool()))
   val ldq_uop                 = Reg(Vec(numLdqEntries, new MicroOp))
-  val ldq_addr                = Reg(Vec(numLdqEntries, Valid(UInt(64.W))))
+  val ldq_addr                = Reg(Vec(numLdqEntries, Valid(UInt(xLen.W))))
   val ldq_addr_is_virtual     = Reg(Vec(numLdqEntries, Bool()))
   val ldq_addr_is_uncacheable = Reg(Vec(numLdqEntries, Bool()))
   val ldq_executed            = Reg(Vec(numLdqEntries, Bool()))
@@ -251,7 +251,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   //val stq = Reg(Vec(numStqEntries, Valid(new STQEntry)))
   val stq_valid           = Reg(Vec(numStqEntries, Bool()))
   val stq_uop             = Reg(Vec(numStqEntries, new MicroOp))
-  val stq_addr            = Reg(Vec(numStqEntries, Valid(UInt(64.W))))
+  val stq_addr            = Reg(Vec(numStqEntries, Valid(UInt(xLen.W))))
   val stq_addr_is_virtual = Reg(Vec(numStqEntries, Bool()))
   val stq_data            = Reg(Vec(numStqEntries, Valid(UInt(xLen.W))))
   val stq_committed       = Reg(Vec(numStqEntries, Bool()))
@@ -780,7 +780,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   //--------------------------------------------
   // HTLB Access
 
-  val exe_h_passthr = widthMap(w => !(exe_htlb_vaddr(w)(63) && !exe_htlb_vaddr(w)(62)))
+  // val exe_h_passthr = widthMap(w => !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)))
+  val exe_h_passthr = widthMap(w => Mux(ENABLE_HTLB.B, !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)), true.B))
 
   for (w <- 0 until lsuWidth) {
     // printf("will retry fire load: %d, store: %d (%x)\n", will_fire_load_retry(w), will_fire_store_retry(w), exe_htlb_vaddr(w))
@@ -790,18 +791,18 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_h_passthr(w)
     htlb.io.kill                    := false.B
-    when (htlb.io.req(w).valid && htlb.io.req(w).bits.haddr =/= 0.U) {
+    when (htlb.io.req(w).valid && htlb.io.req(w).bits.haddr =/= 0.U && ENABLE_HTLB.B) {
       printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough)
     }
   }
 
-  val exe_htlb_miss  = widthMap(w => htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready))
+  val exe_htlb_miss  = widthMap(w => Mux(ENABLE_HTLB.B, htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready), false.B))
 
-  val exe_tlb_vaddr = widthMap(w => htlb.io.resp(w).addr)
+  val exe_tlb_vaddr = widthMap(w => Mux(ENABLE_HTLB.B, htlb.io.resp(w).addr, exe_htlb_vaddr(w)))
 
   val exe_passthr= widthMap(w =>
                    Mux(will_fire_hella_incoming(w)  , hella_req.phys,
-                                                      htlb.io.resp(w).phys))
+                                                      Mux(ENABLE_HTLB.B, htlb.io.resp(w).phys, false.B)))
 
   //--------------------------------------------
   // TLB Access (cntd.)

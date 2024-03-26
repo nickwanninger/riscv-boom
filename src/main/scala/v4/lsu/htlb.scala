@@ -42,13 +42,18 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p)
     })
 
     class EntryData() extends Bundle() {
-        val addr = UInt(64.W)
+        val addr = UInt(xLen.W)
+        val immovable = Bool()
+        val temporal_order = UInt(log2Ceil(cfg.nSets * cfg.nWays).W)
     }
 
     class Entry() extends Bundle {
-        val tag = UInt(32.W)
+        val tag = UInt(handleBits.W)
         val data = UInt(new EntryData().getWidth.W)
         val valid = Bool()
+
+        def entry_data = data.asTypeOf(new EntryData)
+        def getData(vpn: UInt) = OptimizationBarrier(data.asTypeOf(new EntryData))
 
         def sectorHit(hid: UInt) = valid
         def invalidate() = { valid := false.B }
@@ -59,10 +64,20 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p)
 
         def insert(hid: UInt, entry: EntryData) = {
             this.tag := hid
-            this.data := entry.addr.asUInt
+            this.data := entry.asUInt
             this.valid := true.B
         }
+
+        def lock() = {
+            this.data.asTypeOf(new EntryData).immovable := true.B
+        }
+
+        def unlock() = {
+            this.data.asTypeOf(new EntryData).immovable := false.B
+        }
     }
+
+    val counter = RegInit(0.U(log2Ceil(cfg.nSets * cfg.nWays).W))
 
     val vm_enabled = widthMap(w => !io.req(w).bits.passthrough)
 
@@ -77,9 +92,9 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p)
 
     def widthMap[T <: Data](f: Int => T) = VecInit((0 until lsuWidth).map(f))
 
-    val r_refill_tag = Reg(UInt(32.W))
+    val r_refill_tag = Reg(UInt(handleBits.W))
 
-    val hid = widthMap(w => io.req(w).bits.haddr(62, 32))
+    val hid = widthMap(w => io.req(w).bits.haddr(xLen-2, handleBits))
     // val hitsVec = widthMap(w => VecInit(entries.map(_.hit(hid(w)))))
     val hitsVec = widthMap(w => VecInit(entries.map(vm_enabled(w) && _.hit(hid(w)))))
     val real_hits = widthMap(w => hitsVec(w).asUInt)
@@ -88,11 +103,11 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p)
     // }
     val hits = widthMap(w => Cat(!vm_enabled(w), real_hits(w)))
 
-    val ppn = widthMap(w => Mux1H(hitsVec(w) :+ !vm_enabled(w), entries.map(_.data)))
+    val ppn = widthMap(w => Mux1H(hitsVec(w) :+ !vm_enabled(w), entries.map(_.data.asTypeOf(new EntryData).addr)))
 
     for ((e, i) <- entries.zipWithIndex) {
         when (e.valid) {
-            printf("Entry %d: %d, %d, %x\n", i.U, e.valid, e.tag, e.data)
+            printf("Entry %d: %d, %d, %x, %d, %d\n", i.U, e.valid, e.tag, e.data.asTypeOf(new EntryData).addr, e.data.asTypeOf(new EntryData).immovable, e.asTypeOf(new EntryData).temporal_order)
         }
     }
 
@@ -118,7 +133,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p)
 
         io.req(w).ready  := true.B
         io.resp(w).miss  := do_refill || htlb_miss(w)
-        io.resp(w).addr  := Mux(io.req(w).bits.passthrough, effective_address, ppn(w) + io.req(w).bits.haddr(31,0))
+        io.resp(w).addr  := Mux(io.req(w).bits.passthrough, effective_address, ppn(w) + io.req(w).bits.haddr(handleBits-1,0))
         io.resp(w).phys  := false.B
 
         // printf("vaddr req: %x, passthrough %d\n", io.req(w).bits.haddr, io.req(w).bits.passthrough)
@@ -136,9 +151,12 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p)
     when (do_refill) {
         val newEntry = Wire(new EntryData)
         newEntry.addr := io.htw.resp.bits.addr
+        newEntry.immovable := false.B // TODO: should be pulled from entry probably
+        newEntry.temporal_order := counter
 
         for ((e, i) <- entries.zipWithIndex) when (r_sectored_repl_addr === i.U) {
             e.invalidate()
+            counter := Mux(counter === (cfg.nSets * cfg.nWays - 1).U, 0.U, counter + 1.U)
             e.insert(r_refill_tag, newEntry)
         }
     }
