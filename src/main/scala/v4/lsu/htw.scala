@@ -50,7 +50,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val next_state = WireDefault(state)
     state := OptimizationBarrier(next_state)
 
-    val hte_vaddr = io.dpath.htBase + io.requestor.req.bits.bits.hid * 64.U
+    val hte_vaddr = io.dpath.htBase + io.requestor.req.bits.bits.hid * 8.U
     // val ea_sign = Mux(sum(vaddrBits-1), ~sum(63,vaddrBits) === 0.U,
     //                                      sum(63,vaddrBits) =/= 0.U)
     // val effective_address = Cat(ea_sign, sum(vaddrBits-1,0)).asUInt
@@ -61,10 +61,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.mem.req.valid := state === s_req
     io.mem.req.bits.phys := false.B
     io.mem.req.bits.cmd  := M_XRD
-    io.mem.req.bits.size := 2.U // log2Ceil(xLen/8).U
+    io.mem.req.bits.size := log2Ceil(xLen/8).U // 2.U
     io.mem.req.bits.signed := false.B
     io.mem.req.bits.addr := hte_vaddr
-    io.mem.req.bits.idx.foreach(_ := 0.U) // huh?
+    io.mem.req.bits.idx.foreach(_ := hte_vaddr) // huh?
     io.mem.req.bits.dprv := PRV.S.U   // HTW accesses are S-mode by definition
     io.mem.req.bits.dv := false.B
     io.mem.req.bits.tag := DontCare

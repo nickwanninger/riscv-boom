@@ -327,7 +327,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.perf.acquire := io.dmem.perf.acquire
   io.core.perf.release := io.dmem.perf.release
 
-
   val htlb = Module(new HTLB(
     HTLBConfig(dcacheParams.nTLBSets, dcacheParams.nTLBWays)))
   io.htw <> htlb.io.htw
@@ -1014,9 +1013,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       dmem_req(w).bits.is_hella       := true.B
     }
 
-    // when (dmem_req(w).bits.is_hella) {
-    //   printf("HellaReq: %x %d\n", dmem_req(w).bits.addr, dmem_req(w).bits.uop.mem_size)
-    // }
+    when (dmem_req(w).bits.is_hella) {
+      printf("HellaReq: %x %d\n", dmem_req(w).bits.addr, dmem_req(w).bits.uop.mem_size)
+    }
 
     //-------------------------------------------------------------
     // Write Addr into the LAQ/SAQ
@@ -1933,9 +1932,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       }
     }
 
-    // when (io.hellacache.resp.valid) {
-    //   printf("HellaResp: %x %x (%d)\n", io.hellacache.resp.bits.addr, io.hellacache.resp.bits.data, io.hellacache.resp.bits.size)
-    // }
+    when (io.hellacache.resp.valid) {
+      printf("HellaResp: %x %x (%d)\n", io.hellacache.resp.bits.addr, io.hellacache.resp.bits.data, io.hellacache.resp.bits.size)
+    }
   } .elsewhen (hella_state === h_replay) {
     can_fire_hella_wakeup(0) := true.B
 
