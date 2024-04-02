@@ -1353,6 +1353,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
 
   io.htw.htBase := custom_csrs.htBase
+  io.lsu.htBase := custom_csrs.htBase
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

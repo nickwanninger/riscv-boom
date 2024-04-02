@@ -31,7 +31,7 @@ case class HTLBConfig(
     nWays: Int,
 )
 
-class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p)
+class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
 {
     val io = IO(new Bundle {
         val req = Flipped(Vec(lsuWidth, Decoupled(new HTLBReq)))
@@ -39,41 +39,66 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p)
         val resp = Vec(lsuWidth, new HTLBResp)
         val htw = new HTLBHTWIO
         val kill = Input(Bool())
+        val tlb = Flipped(Vec(lsuWidth, Decoupled(UInt(ppnBits.W))))
     })
 
     class EntryData() extends Bundle() {
-        val addr = UInt(xLen.W)
-        val immovable = Bool()
+        val vaddr = UInt(xLen.W)
         val temporal_order = UInt(log2Ceil(cfg.nSets * cfg.nWays).W)
+        val immovable = Bool()
+        val counter = UInt(3.W)
+        val ppn = UInt(ppnBits.W)
     }
 
-    class Entry() extends Bundle {
+    class Entry(val nSectors: Int) extends Bundle {
+        require(isPow2(nSectors))
+        require(nSectors == 1) // FIXME: this is a hack to make the code work for now
+
         val tag = UInt(handleBits.W)
-        val data = UInt(new EntryData().getWidth.W)
-        val valid = Bool()
+        val data = Vec(nSectors, UInt(new EntryData().getWidth.W))
+        val valid = Vec(nSectors, Bool())
+        def entry_data = data.map(_.asTypeOf(new EntryData))
 
-        def entry_data = data.asTypeOf(new EntryData)
-        def getData(vpn: UInt) = OptimizationBarrier(data.asTypeOf(new EntryData))
-
-        def sectorHit(hid: UInt) = valid
-        def invalidate() = { valid := false.B }
-
+        private def sectorIdx(tag: UInt) = tag.extract(log2Ceil(nSectors)-1, 0)
+        def getData(tag: UInt) = data(sectorIdx(tag)).asTypeOf(new EntryData)
+        def sectorHit(hid: UInt) = valid.orR && sectorTagMatch(hid)
+        def sectorTagMatch(hid: UInt) = ((tag ^ hid) >> log2Ceil(nSectors)) === 0.U
         def hit(hid: UInt) = {
-            valid && hid === tag
+            val idx = sectorIdx(hid)
+            
+            // val entry = getData(tag)
+            // entry.counter := Mux(valid(idx) && sectorTagMatch(tag) && entry.counter =/= 7.U, entry.counter + 1.U, entry.counter)
+            // data(idx) := ShiftRegister(entry.asUInt, 1)
+
+            valid(idx) && sectorTagMatch(hid)
         }
 
-        def insert(hid: UInt, entry: EntryData) = {
-            this.tag := hid
-            this.data := entry.asUInt
-            this.valid := true.B
+        def ppn(hid: UInt) = getData(hid).ppn
+
+        def insert(tag: UInt, entry: EntryData) = {
+            this.tag := tag
+
+            val idx = sectorIdx(tag)
+            valid(idx) := true.B
+            data(idx) := entry.asUInt
         }
 
-        def lock() = {
-            this.data.asTypeOf(new EntryData).immovable := true.B
+        def invalidate() = { valid.foreach(_ := false.B) }
+
+        def lock(tag: UInt) = {
+            getData(tag).immovable := true.B
         }
 
-        def unlock() = {
-            this.data.asTypeOf(new EntryData).immovable := false.B
+        def unlock(tag: UInt) = {
+            getData(tag).immovable := false.B
+        }
+
+        def setPPN(tag: UInt, ppn: UInt) = {
+            val entry = getData(tag)
+            entry.ppn := ppn
+
+            val idx = sectorIdx(tag)
+            data(idx) := entry.asUInt
         }
     }
 
@@ -81,8 +106,10 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p)
 
     val vm_enabled = widthMap(w => !io.req(w).bits.passthrough)
 
-    val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry))
+    val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry(1)))
     val r_sectored_repl_addr = Reg(UInt(log2Ceil(entries.size).W))
+    val r_sectored_hit_addr = Reg(UInt(log2Ceil(entries.size).W))
+    val r_sectored_hit = Reg(Bool())
 
     val s_ready :: s_request :: s_wait :: s_wait_invalidate :: Nil = Enum(4)
     val state = RegInit(s_ready)
@@ -95,19 +122,22 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p)
     val r_refill_tag = Reg(UInt(handleBits.W))
 
     val hid = widthMap(w => io.req(w).bits.haddr(xLen-2, handleBits))
-    // val hitsVec = widthMap(w => VecInit(entries.map(_.hit(hid(w)))))
     val hitsVec = widthMap(w => VecInit(entries.map(vm_enabled(w) && _.hit(hid(w)))))
     val real_hits = widthMap(w => hitsVec(w).asUInt)
-    // for (w <- 0 until lsuWidth) {
-    //     printf("real_hits: %x, %x\n", real_hits(w), entries(0).hit(hid(w)))
-    // }
     val hits = widthMap(w => Cat(!vm_enabled(w), real_hits(w)))
 
-    val ppn = widthMap(w => Mux1H(hitsVec(w) :+ !vm_enabled(w), entries.map(_.data.asTypeOf(new EntryData).addr)))
+    val vaddr = widthMap(w => Mux1H(hitsVec(w) :+ !vm_enabled(w), entries.map(_.data.asTypeOf(new EntryData).vaddr)))
+    val ppn = widthMap(w => Mux1H(hitsVec(w) :+ !vm_enabled(w), entries.map(_.data.asTypeOf(new EntryData).ppn)))
+    val paddr = widthMap(w => Cat(ppn(w), vaddr(w)(corePgIdxBits-1,0)))
 
-    for ((e, i) <- entries.zipWithIndex) {
-        when (e.valid) {
-            printf("Entry %d: %d, %d, %x, %d, %d\n", i.U, e.valid, e.tag, e.data.asTypeOf(new EntryData).addr, e.data.asTypeOf(new EntryData).immovable, e.asTypeOf(new EntryData).temporal_order)
+    for (w <- 0 until lsuWidth) {
+        for ((e, i) <- entries.zipWithIndex) {
+            for (s <- 0 until e.nSectors) {
+                when (e.valid(s)) {
+                    val entry = e.data(s).asTypeOf(new EntryData)
+                    printf("Entry %d: %d, %d, %x, %d, %d (%x), counter: %d\n", i.U, e.valid(s), e.tag, entry.vaddr, entry.immovable, entry.temporal_order, entry.ppn, entry.counter)
+                }
+            }
         }
     }
 
@@ -133,14 +163,12 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p)
 
         io.req(w).ready  := true.B
         io.resp(w).miss  := do_refill || htlb_miss(w)
-        io.resp(w).addr  := Mux(io.req(w).bits.passthrough, effective_address, ppn(w) + io.req(w).bits.haddr(handleBits-1,0))
-        io.resp(w).phys  := false.B
+        io.resp(w).addr  := Mux(io.req(w).bits.passthrough, effective_address, Mux(ppn(w) === 0.U, vaddr(w) + io.req(w).bits.haddr(handleBits-1,0), paddr(w) + io.req(w).bits.haddr(handleBits-1,0)))
+        // io.resp(w).addr  := Mux(io.req(w).bits.passthrough, effective_address, vaddr(w) + io.req(w).bits.haddr(handleBits-1,0))
+        io.resp(w).phys  := ppn(w) =/= 0.U && vm_enabled(w)
 
-        // printf("vaddr req: %x, passthrough %d\n", io.req(w).bits.haddr, io.req(w).bits.passthrough)
-        // printf("%d, %d, %d\n", do_refill, htlb_miss(w), htlb_hit(w))
         when (!io.resp(w).miss && !io.req(w).bits.passthrough) {
-        //   printf("ppn: %x (%d), is_handle: %d\n", ppn(w) + io.req(w).bits.haddr(31, 0), io.req(w).bits.passthrough, io.req(w).bits.haddr(63) && !io.req(w).bits.haddr(62))
-          printf("[HTLB] -> [LSU] %x %d\n", io.resp(w).addr, io.resp(w).phys)
+          printf("[HTLB] -> [LSU] %x %d (for %x) (paddr: %x, vaddr: %x)\n", io.resp(w).addr, io.resp(w).phys, io.req(w).bits.haddr, paddr(w) + io.req(w).bits.haddr(handleBits-1,0), vaddr(w) + io.req(w).bits.haddr(handleBits-1,0))
         }
     }
 
@@ -150,28 +178,44 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p)
 
     when (do_refill) {
         val newEntry = Wire(new EntryData)
-        newEntry.addr := io.htw.resp.bits.addr
+        newEntry.vaddr := io.htw.resp.bits.addr
         newEntry.immovable := false.B // TODO: should be pulled from entry probably
         newEntry.temporal_order := counter
+        newEntry.ppn := 0.U
+        newEntry.counter := 0.U
 
-        for ((e, i) <- entries.zipWithIndex) when (r_sectored_repl_addr === i.U) {
+        printf("New Entry: %x, %d, %d, %x\n", newEntry.vaddr, newEntry.immovable, newEntry.temporal_order, newEntry.ppn)
+
+        val waddr = Mux(r_sectored_hit, r_sectored_hit_addr, r_sectored_repl_addr)
+        for ((e, i) <- entries.zipWithIndex) when (waddr === i.U) {
             e.invalidate()
-            counter := Mux(counter === (cfg.nSets * cfg.nWays - 1).U, 0.U, counter + 1.U)
             e.insert(r_refill_tag, newEntry)
         }
+        counter := Mux(counter === (cfg.nSets * cfg.nWays - 1).U, 0.U, counter + 1.U)
     }
 
     for (w <- 0 until lsuWidth) {
-        // printf("[HTLB] State: %d, %d, %d, %d\n", io.req(w).fire, htlb_miss(w), state, !io.req(w).bits.passthrough);
+        // printf("[HTLB] State: %d, %d, %d, %d (hid: %d)\n", io.req(w).fire, htlb_miss(w), state, !io.req(w).bits.passthrough, hid(w))
         when (io.req(w).fire && htlb_miss(w) && state === s_ready && !io.req(w).bits.passthrough) {
           state := s_request
           r_refill_tag := hid(w)
 
           r_sectored_repl_addr  := replacementEntry(entries, sectored_plru.way)
+          r_sectored_hit_addr   := OHToUInt(sector_hits(w))
+          r_sectored_hit        := sector_hits(w).orR
         }
 
         when (io.htw.req.valid) {
           printf("[HTLB] -> [HTW] Looking up hid: %x\n", io.htw.req.bits.bits.hid)
+        }
+
+        io.tlb(w).ready := true.B
+        when (io.tlb(w).valid) {
+            printf("paddr for hid %x: %x\n", hid(w), io.tlb(w).bits)
+            // TODO: add check here to see if this is valid (i.e., not falling off a page)
+            for ((e, i) <- entries.zipWithIndex) when (e.hit(hid(w))) {
+                e.setPPN(hid(w), io.tlb(w).bits)
+            }
         }
     }
 

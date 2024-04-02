@@ -268,6 +268,7 @@ trait ScalarOpConstants
   val uopSCALL     = 108.U(UOPC_SZ.W)
   val uopSBREAK    = 109.U(UOPC_SZ.W)
 
+  val uopINVLHID    = 110.U(UOPC_SZ.W)
 
   val uopROCC      = 126.U(UOPC_SZ.W)
 

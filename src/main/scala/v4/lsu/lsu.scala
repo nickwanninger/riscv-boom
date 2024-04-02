@@ -160,6 +160,8 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
     val release = Bool()
     val tlbMiss = Bool()
   })
+
+  val htBase = Input(UInt(xLen.W))
 }
 
 class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
@@ -327,9 +329,11 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.perf.acquire := io.dmem.perf.acquire
   io.core.perf.release := io.dmem.perf.release
 
-  val htlb = Module(new HTLB(
-    HTLBConfig(dcacheParams.nTLBSets, dcacheParams.nTLBWays)))
+  val htlb = Module(new HTLB(rocket.TLBConfig(dcacheParams.nTLBSets, dcacheParams.nTLBWays)))
   io.htw <> htlb.io.htw
+
+  // TODO: condition this on privilege level when we get to linux and running things not in S
+  val htlb_enabled = ENABLE_HTLB.B && io.core.htBase =/= 0.U
 
   val clear_store     = WireInit(false.B)
 
@@ -781,7 +785,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   // HTLB Access
 
   // val exe_h_passthr = widthMap(w => !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)))
-  val exe_h_passthr = widthMap(w => Mux(ENABLE_HTLB.B, !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)), true.B))
+  val exe_h_passthr = widthMap(w => Mux(htlb_enabled, !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)), true.B))
 
   for (w <- 0 until lsuWidth) {
     // printf("will retry fire load: %d, store: %d (%x)\n", will_fire_load_retry(w), will_fire_store_retry(w), exe_htlb_vaddr(w))
@@ -791,24 +795,24 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_h_passthr(w)
     htlb.io.kill                    := false.B
-    when (htlb.io.req(w).valid && htlb.io.req(w).bits.haddr =/= 0.U && ENABLE_HTLB.B) {
+    when (htlb.io.req(w).valid && htlb.io.req(w).bits.haddr =/= 0.U && htlb_enabled && !htlb.io.req(w).bits.passthrough) {
       printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough)
     }
   }
 
-  val exe_htlb_miss  = widthMap(w => Mux(ENABLE_HTLB.B, htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready), false.B))
+  val exe_htlb_miss  = widthMap(w => Mux(htlb_enabled, htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready), false.B))
 
-  val exe_tlb_vaddr = widthMap(w => Mux(ENABLE_HTLB.B, htlb.io.resp(w).addr, exe_htlb_vaddr(w)))
+  val exe_tlb_vaddr = widthMap(w => Mux(htlb_enabled, htlb.io.resp(w).addr, exe_htlb_vaddr(w)))
 
   val exe_passthr= widthMap(w =>
                    Mux(will_fire_hella_incoming(w)  , hella_req.phys,
-                                                      Mux(ENABLE_HTLB.B, htlb.io.resp(w).phys, false.B)))
+                                                      false.B))
 
   //--------------------------------------------
   // TLB Access (cntd.)
 
   for (w <- 0 until lsuWidth) {
-    dtlb.io.req(w).valid            := exe_tlb_valid(w) && !exe_htlb_miss(w)
+    dtlb.io.req(w).valid            := exe_tlb_valid(w) && !exe_htlb_miss(w) && !htlb.io.resp(w).phys
     dtlb.io.req(w).bits.vaddr       := exe_tlb_vaddr(w)
     dtlb.io.req(w).bits.size        := exe_size(w)
     dtlb.io.req(w).bits.cmd         := exe_cmd(w)
@@ -816,7 +820,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     dtlb.io.req(w).bits.prv         := io.ptw.status.prv
     dtlb.io.req(w).bits.v           := io.ptw.status.v
 
-    when (dtlb.io.req(w).valid && dtlb.io.req(w).bits.vaddr =/= 0.U) {
+    when (dtlb.io.req(w).valid && dtlb.io.req(w).bits.vaddr =/= 0.U && dtlb.io.req(w).bits.passthrough) {
       printf("[LSU] -> [TLB] %x\n", dtlb.io.req(w).bits.vaddr)
     }
 
@@ -884,13 +888,19 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     oldest_xcpt_rob_idx = Mux(is_older, mem_xcpt_uops(w).rob_idx, oldest_xcpt_rob_idx)
   }
 
-  val exe_tlb_miss  = widthMap(w => exe_htlb_miss(w) || (dtlb.io.req(w).valid && (dtlb.io.resp(w).miss || !dtlb.io.req(w).ready)))
-  val exe_tlb_paddr = widthMap(w => Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits),
-                                        exe_tlb_vaddr(w)(corePgIdxBits-1,0)))
+  val exe_tlb_miss  = widthMap(w => Mux(htlb.io.resp(w).phys, false.B, exe_htlb_miss(w) || (dtlb.io.req(w).valid && (dtlb.io.resp(w).miss || !dtlb.io.req(w).ready))))
+  val exe_tlb_paddr = widthMap(w => Mux(htlb.io.resp(w).phys, htlb.io.resp(w).addr, Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits),
+                                        exe_tlb_vaddr(w)(corePgIdxBits-1,0))))
   val exe_tlb_uncacheable = widthMap(w => !(dtlb.io.resp(w).cacheable))
 
   for (w <- 0 until lsuWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr, "[lsu] paddrs should match.")
+
+    when (!exe_tlb_miss(w) && !exe_h_passthr(w)) {
+     printf("exe_tlb_paddr(%d): %x, htlb: %x: \n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr)
+    }
+    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && !exe_h_passthr(w) && !htlb.io.resp(w).phys
+    htlb.io.tlb(w).bits := exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits)
 
     when (mem_xcpt_valids(w))
     {
