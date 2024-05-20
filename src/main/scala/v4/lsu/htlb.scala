@@ -46,7 +46,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
         val vaddr = UInt(xLen.W)
         val temporal_order = UInt(log2Ceil(cfg.nSets * cfg.nWays).W)
         val immovable = Bool()
-        val counter = UInt(3.W)
+        val counter = UInt(8.W)
         val ppn = UInt(ppnBits.W)
     }
 
@@ -58,46 +58,52 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
         val data = Vec(nSectors, UInt(new EntryData().getWidth.W))
         val valid = Vec(nSectors, Bool())
         def entry_data = data.map(_.asTypeOf(new EntryData))
+        val hits = Vec(nSectors, UInt(8.W))
 
-        private def sectorIdx(tag: UInt) = tag.extract(log2Ceil(nSectors)-1, 0)
-        def getData(tag: UInt) = data(sectorIdx(tag)).asTypeOf(new EntryData)
+        private def sectorIdx(hid: UInt) = hid.extract(log2Ceil(nSectors)-1, 0)
+        def getData(hid: UInt) = data(sectorIdx(hid)).asTypeOf(new EntryData)
         def sectorHit(hid: UInt) = valid.orR && sectorTagMatch(hid)
-        def sectorTagMatch(hid: UInt) = ((tag ^ hid) >> log2Ceil(nSectors)) === 0.U
+        def sectorTagMatch(hid: UInt) = ((this.tag ^ hid) >> log2Ceil(nSectors)) === 0.U
         def hit(hid: UInt) = {
             val idx = sectorIdx(hid)
-            
-            // val entry = getData(tag)
-            // entry.counter := Mux(valid(idx) && sectorTagMatch(tag) && entry.counter =/= 7.U, entry.counter + 1.U, entry.counter)
-            // data(idx) := ShiftRegister(entry.asUInt, 1)
 
-            valid(idx) && sectorTagMatch(hid)
+            val did_hit = valid(idx) && sectorTagMatch(hid) 
+
+            when (did_hit) {
+                val entry = getData(hid)
+                hits(idx) := Mux(hits(idx) =/= 255.U, hits(idx) + 1.U, hits(idx))
+                entry.counter := hits(idx)
+                data(idx) := entry.asUInt
+            }
+
+            did_hit
         }
 
         def ppn(hid: UInt) = getData(hid).ppn
 
-        def insert(tag: UInt, entry: EntryData) = {
-            this.tag := tag
+        def insert(hid: UInt, entry: EntryData) = {
+            this.tag := hid
 
-            val idx = sectorIdx(tag)
+            val idx = sectorIdx(hid)
             valid(idx) := true.B
             data(idx) := entry.asUInt
         }
 
         def invalidate() = { valid.foreach(_ := false.B) }
 
-        def lock(tag: UInt) = {
-            getData(tag).immovable := true.B
+        def lock(hid: UInt) = {
+            getData(hid).immovable := true.B
         }
 
-        def unlock(tag: UInt) = {
-            getData(tag).immovable := false.B
+        def unlock(hid: UInt) = {
+            getData(hid).immovable := false.B
         }
 
-        def setPPN(tag: UInt, ppn: UInt) = {
-            val entry = getData(tag)
+        def setPPN(hid: UInt, ppn: UInt) = {
+            val entry = getData(hid)
             entry.ppn := ppn
 
-            val idx = sectorIdx(tag)
+            val idx = sectorIdx(hid)
             data(idx) := entry.asUInt
         }
     }

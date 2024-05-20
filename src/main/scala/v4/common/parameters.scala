@@ -174,6 +174,10 @@ class BoomCustomCSRs(implicit p: Parameters) extends freechips.rocketchip.tile.C
     Some(CustomCSR(htBaseCSRId, BigInt(0xffffffffL), Some(BigInt(0x0000000fL))))
   }
 
+  override def hasidCSR = {
+    Some(CustomCSR(hasidCSRId, BigInt(0xffffffffL), Some(BigInt(0x0000000fL))))
+  }
+
   val enableOOOCSRId = 0x800
   def enableOOOCSR = Some(CustomCSR(enableOOOCSRId, BigInt(1), Some(BigInt(1))))
 
@@ -182,7 +186,7 @@ class BoomCustomCSRs(implicit p: Parameters) extends freechips.rocketchip.tile.C
 
   def marchid = CustomCSR.constant(CSRs.marchid, BigInt(2))
 
-  override def decls = enableOOOCSR.toSeq ++ enableBPDCSR.toSeq ++ bpmCSR.toSeq ++ chickenCSR ++ htBaseCSR ++ Seq(marchid)
+  override def decls = enableOOOCSR.toSeq ++ enableBPDCSR.toSeq ++ bpmCSR.toSeq ++ chickenCSR ++ htBaseCSR ++ hasidCSR ++ Seq(marchid)
   def enableOOO = getOrElse(enableOOOCSR, _.value(0), true.B) && !getOrElse(chickenCSR, _.value(3), false.B)
   def enableBPD = getOrElse(enableBPDCSR, _.value(0), true.B)
 }
