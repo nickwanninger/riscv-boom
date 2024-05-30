@@ -62,6 +62,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.mem.req.bits.phys := false.B
     io.mem.req.bits.cmd  := M_XRD
     io.mem.req.bits.size := log2Ceil(xLen/8).U // 2.U
+    printf("[HTW] -> [Mem] Requesting HID %d at %x (%d)\n", io.requestor.req.bits.bits.hid, hte_vaddr, io.mem.req.bits.size)
     io.mem.req.bits.signed := false.B
     io.mem.req.bits.addr := hte_vaddr
     io.mem.req.bits.idx.foreach(_ := hte_vaddr) // huh?

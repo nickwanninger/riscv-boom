@@ -14,6 +14,7 @@ class HTLBReq(implicit p: Parameters) extends BoomBundle()(p)
 {
     val haddr = UInt(xLen.W)
     val passthrough = Bool()
+    val sfence = Input(Valid(new SFenceReq))
 }
 
 class HTLBResp(implicit p: Parameters) extends BoomBundle()(p)
@@ -40,6 +41,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
         val htw = new HTLBHTWIO
         val kill = Input(Bool())
         val tlb = Flipped(Vec(lsuWidth, Decoupled(UInt(ppnBits.W))))
+        val hasid = Input(UInt(asIdBits max 1).W)
     })
 
     class EntryData() extends Bundle() {
@@ -48,6 +50,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
         val immovable = Bool()
         val counter = UInt(8.W)
         val ppn = UInt(ppnBits.W)
+        val hasid = UInt((asIdBits max 1).W) // TODO zero-width
     }
 
     class Entry(val nSectors: Int) extends Bundle {
@@ -91,6 +94,11 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
 
         def invalidate() = { valid.foreach(_ := false.B) }
 
+        def invalidateHASID() = { 
+            // TODO: fix to actually read hasid
+            valid.foreach(_ := false.B)
+        }
+
         def lock(hid: UInt) = {
             getData(hid).immovable := true.B
         }
@@ -119,7 +127,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
 
     val s_ready :: s_request :: s_wait :: s_wait_invalidate :: Nil = Enum(4)
     val state = RegInit(s_ready)
-
 
     val do_refill = io.htw.resp.valid
 
@@ -160,6 +167,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
       }
 
     io.miss_rdy := state === s_ready
+
     for (w <- 0 until lsuWidth) {
         // handle original case
         val sum = io.req(w).bits.haddr
@@ -189,6 +197,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
         newEntry.temporal_order := counter
         newEntry.ppn := 0.U
         newEntry.counter := 0.U
+        newEntry.hasid := io.hasid
 
         printf("New Entry: %x, %d, %d, %x\n", newEntry.vaddr, newEntry.immovable, newEntry.temporal_order, newEntry.ppn)
 
@@ -200,6 +209,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
         counter := Mux(counter === (cfg.nSets * cfg.nWays - 1).U, 0.U, counter + 1.U)
     }
 
+    val sfence = io.sfence.valid
     for (w <- 0 until lsuWidth) {
         // printf("[HTLB] State: %d, %d, %d, %d (hid: %d)\n", io.req(w).fire, htlb_miss(w), state, !io.req(w).bits.passthrough, hid(w))
         when (io.req(w).fire && htlb_miss(w) && state === s_ready && !io.req(w).bits.passthrough) {
@@ -223,6 +233,35 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
                 e.setPPN(hid(w), io.tlb(w).bits)
             }
         }
+    }
+
+    when (state === s_request) {
+      when (sfence) { state := s_ready }
+      when (io.htw.req.ready) { state := Mux(sfence, s_wait_invalidate, s_wait) }
+      when (io.kill) { state := s_ready }
+    }
+
+    when (state === s_wait && sfence) {
+      state := s_wait_invalidate
+    }
+    when (io.htw.resp.valid) {
+      state := s_ready
+    }
+
+    when (sfence) {
+      for (w <- 0 until lsuWidth) {
+        // TODO: add some assertion here?
+        // assert(!io.sfence.bits.rs1 || (io.sfence.bits.addr >> pgIdxBits) === vpn(w))
+        for (e <- all_entries) {
+          when (io.sfence.bits.rs3) {
+            when (io.sfence.bits.rs1) {
+                e.invalidate()
+            } .otherwise {
+                e.invalidateHASID(io.sfence.bits.asid)
+            }
+          } .otherwise {}
+        }
+      }
     }
 
     when (io.htw.resp.valid) {
