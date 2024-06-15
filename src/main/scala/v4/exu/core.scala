@@ -68,6 +68,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.ptw_tlb := DontCare
   io.ptw := DontCare
   io.ifu := DontCare
+  io.htw.sfence := DontCare
 
   //**********************************
   // construct all of the modules
@@ -1354,7 +1355,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   io.htw.htBase := custom_csrs.htBase
   io.lsu.htBase := custom_csrs.htBase
-  io.lsu.hasid := custom_csrs.hasid
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

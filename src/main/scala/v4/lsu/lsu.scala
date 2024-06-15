@@ -162,7 +162,6 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
   })
 
   val htBase = Input(UInt(xLen.W))
-  val hasid = Input(UInt(asIdBits max 1).W)
 }
 
 class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
@@ -332,7 +331,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   val htlb = Module(new HTLB(rocket.TLBConfig(dcacheParams.nTLBSets, dcacheParams.nTLBWays)))
   io.htw <> htlb.io.htw
-  htlb.io.hasid <> io.core.hasid
 
   // TODO: condition this on privilege level when we get to linux and running things not in S
   val htlb_enabled = ENABLE_HTLB.B && io.core.htBase =/= 0.U
@@ -797,7 +795,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_h_passthr(w)
     htlb.io.sfence                  := exe_sfence
-    htlb.io.kill                    := false.B
     when (htlb.io.req(w).valid && htlb.io.req(w).bits.haddr =/= 0.U && htlb_enabled && !htlb.io.req(w).bits.passthrough) {
       printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough)
     }
@@ -896,15 +893,17 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                                         exe_tlb_vaddr(w)(corePgIdxBits-1,0))))
   val exe_tlb_uncacheable = widthMap(w => !(dtlb.io.resp(w).cacheable))
 
-  val phys_contig = widthMap(w => true.B)
+  val small_handle_criterium = widthMap(w => !exe_h_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).small)
 
   for (w <- 0 until lsuWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr, "[lsu] paddrs should match.")
 
+    /* debug for printing paddr for small handle optimization
     when (!exe_tlb_miss(w) && !exe_h_passthr(w)) {
      printf("exe_tlb_paddr(%d): %x, htlb: %x: \n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr)
     }
-    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && !exe_h_passthr(w) && !htlb.io.resp(w).phys && phys_contig(w)
+    */
+    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w)
     htlb.io.tlb(w).bits := exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits)
 
     when (mem_xcpt_valids(w))
