@@ -45,10 +45,16 @@ class HTLBHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
   val resp = Flipped(Valid(new HTWResp))
 }
 
+class HTWPerfEvents(implicit p: Parameters) extends BoomBundle()(p) {
+    val l2miss = Bool()
+    val l2hit = Bool()
+}
+
 class DatapathHTWIO(implicit p: Parameters) extends BoomBundle()(p)
 {
     val htBase = Input(UInt(xLen.W))
     val sfence = Flipped(Valid(new SFenceReq))
+    val perf = Output(new HTWPerfEvents())
 }
 
 class HTW(implicit p: Parameters) extends BoomModule()(p) {
@@ -228,8 +234,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         val s2_entry_vec = s2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2TLBSets)))
         val s2_hit_vec = (0 until coreParams.nL2TLBWays).map(way => s2_valid_vec(way) && (r_tag === s2_entry_vec(way).tag))
         val s2_hit = s2_valid && s2_hit_vec.orR
-        // io.dpath.perf.l2miss := s2_valid && !(s2_hit_vec.orR)
-        // io.dpath.perf.l2hit := s2_hit
+        io.dpath.perf.l2miss := s2_valid && !(s2_hit_vec.orR)
+        io.dpath.perf.l2hit := s2_hit
         when (s2_hit) {
           l2_plru.access(r_idx, OHToUInt(s2_hit_vec))
           assert((PopCount(s2_hit_vec) === 1.U) || s2_error, "L2 HTLB multi-hit")
@@ -258,6 +264,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     next_state := s_ready
     resp_valid(0) := true.B
   }
+
+  io.dpath.perf.l2hit := false.B
+  io.dpath.perf.l2miss := false.B
 
   private def ccover(cond: Bool, label: String, desc: String)(implicit sourceInfo: SourceInfo) =
     if (usingVM) property.cover(cond, s"HTW_$label", "MemorySystem;;" + desc)
