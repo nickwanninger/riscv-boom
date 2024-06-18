@@ -120,6 +120,17 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         printf("[HTW] -> [Mem] Looking up HID: %d at %x\n", io.requestor.req.bits.bits.hid, io.mem.req.bits.addr)
     }
 
+  val mem_resp_valid = RegNext(io.mem.resp.valid)
+  val mem_resp_data = RegNext(io.mem.resp.bits.data)
+  io.mem.uncached_resp.map { resp =>
+    assert(!(resp.valid && io.mem.resp.valid))
+    resp.ready := true.B
+    when (resp.valid) {
+      mem_resp_valid := true.B
+      mem_resp_data := resp.bits.data
+    }
+  }
+
     // Send completed request to HTLB
     // TODO: what if the HTE is invalid?
     io.requestor.resp.valid := resp_valid(0)
@@ -138,6 +149,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     switch (state) {
         is (s_ready) {
             next_state := Mux(io.requestor.req.valid, s_req1, s_ready)
+            r_req := io.requestor.req.bits.bits
         }
         is (s_req1) {
             when (io.mem.resp.valid) {
@@ -149,14 +161,16 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val l2_refill = RegNext(false.B)
     l2_refill_wire := l2_refill
 
-    val pte = io.mem.resp.bits.data.asTypeOf(new HTE)
-    when (io.mem.resp.valid) {
+    val tmp = mem_resp_data.asTypeOf(new HTE())
+    val pte = WireDefault(tmp)
+    when (mem_resp_valid) {
       printf("Resp: %x\n", io.mem.resp.bits.data)
       printf("PTE - Small: %x, Frozen: %x, Reserved: %x, Addr: %x\n", pte.small, pte.frozen, pte.reserved, pte.addr)
       l2_refill := true.B
     }
+
     // TODO: clock gate for all this later
-    val (l2_hit, l2_error, l2_hte, l2_htlb_ram) = if (coreParams.nL2TLBEntries == 0) (false.B, false.B, WireDefault(0.U.asTypeOf(new HTE)), None) else {
+    val (l2_hit, l2_error, l2_hte, l2_htlb_ram) = {
         val code = new ParityCode
         require(isPow2(coreParams.nL2TLBEntries))
         require(isPow2(coreParams.nL2TLBWays))
@@ -197,6 +211,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           val wmask = if (coreParams.nL2TLBWays > 1) Mux(r_valid_vec_q.andR, UIntToOH(r_l2_plru_way, coreParams.nL2TLBWays), PriorityEncoderOH(~r_valid_vec_q)) else 1.U(1.W)
           ram.write(r_idx, VecInit(Seq.fill(coreParams.nL2TLBWays)(code.encode(entry.asUInt))), wmask.asBools)
           printf("Entry to be written: %x\n", entry.addr)
+          printf("Entry to be written: %x (%d, %d)\n", r_hte.addr, mem_resp_valid, l2_refill)
+          printf("wmask: %x\n", wmask)
 
           val mask = UIntToOH(r_idx)
           for (way <- 0 until coreParams.nL2TLBWays) {
@@ -233,6 +249,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         // decode
         val s2_entry_vec = s2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2TLBSets)))
         val s2_hit_vec = (0 until coreParams.nL2TLBWays).map(way => s2_valid_vec(way) && (r_tag === s2_entry_vec(way).tag))
+        printf("r_idx: %x, r_tag: %x, entry-vec-tag: %x\n", r_idx, r_tag, s2_entry_vec(0).tag)
         val s2_hit = s2_valid && s2_hit_vec.orR
         io.dpath.perf.l2miss := s2_valid && !(s2_hit_vec.orR)
         io.dpath.perf.l2hit := s2_hit
@@ -253,12 +270,12 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         }
 
         printf("s2_hit_entry_addr: %x\n", s2_hit_entry.addr)
-        printf("s2_hte_addr: %x\n", s2_hte.addr)
 
-        (s2_hit, false.B, s2_hte, Some(ram))
+        (s2_hit, s2_error, s2_hte, Some(ram))
     }
+    printf("%d, %d, %d\n", l2_hit, l2_error, mem_resp_valid)
     r_hte := OptimizationBarrier(Mux(l2_hit && !l2_error, l2_hte,
-                                 Mux(io.mem.resp.valid, pte, r_hte)))
+                                 Mux(mem_resp_valid, pte, r_hte)))
 
   when (l2_hit && !l2_error && state === s_wait1) {
     next_state := s_ready

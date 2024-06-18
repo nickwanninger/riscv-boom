@@ -109,7 +109,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
 
     def widthMap[T <: Data](f: Int => T) = VecInit((0 until lsuWidth).map(f))
 
-    val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry(1)))
+    val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry(cfg.nSectors)))
 
     val s_ready :: s_request :: s_wait :: s_wait_invalidate :: Nil = Enum(4)
     val state = RegInit(s_ready)
