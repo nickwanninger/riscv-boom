@@ -136,10 +136,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.requestor.resp.valid := resp_valid(0)
     io.requestor.resp.bits.hte := r_hte
 
-    when (io.requestor.resp.valid && io.requestor.resp.bits.hte.small) {
-        printf("[HTW] Found Small Object!\n")
-    }
-
     /* debug print for response from HTW */
     when (io.requestor.resp.valid) {
         printf("[HTW] -> [HTLB] Found HID %d to be %x\n", io.requestor.req.bits.bits.hid, io.requestor.resp.bits.hte.addr)
@@ -149,7 +145,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     switch (state) {
         is (s_ready) {
             next_state := Mux(io.requestor.req.valid, s_req1, s_ready)
-            r_req := io.requestor.req.bits.bits
+            when (io.requestor.req.valid) {
+              r_req := io.requestor.req.bits.bits
+            }
         }
         is (s_req1) {
             when (io.mem.resp.valid) {
@@ -164,7 +162,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val tmp = mem_resp_data.asTypeOf(new HTE())
     val pte = WireDefault(tmp)
     when (mem_resp_valid) {
-      printf("Resp: %x\n", io.mem.resp.bits.data)
       printf("PTE - Small: %x, Frozen: %x, Reserved: %x, Addr: %x\n", pte.small, pte.frozen, pte.reserved, pte.addr)
       l2_refill := true.B
     }
@@ -211,8 +208,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           val wmask = if (coreParams.nL2TLBWays > 1) Mux(r_valid_vec_q.andR, UIntToOH(r_l2_plru_way, coreParams.nL2TLBWays), PriorityEncoderOH(~r_valid_vec_q)) else 1.U(1.W)
           ram.write(r_idx, VecInit(Seq.fill(coreParams.nL2TLBWays)(code.encode(entry.asUInt))), wmask.asBools)
           printf("Entry to be written: %x\n", entry.addr)
-          printf("Entry to be written: %x (%d, %d)\n", r_hte.addr, mem_resp_valid, l2_refill)
-          printf("wmask: %x\n", wmask)
 
           val mask = UIntToOH(r_idx)
           for (way <- 0 until coreParams.nL2TLBWays) {
@@ -236,8 +231,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         */
 
         val s0_valid = !l2_refill
-        val s0_suitable = true.B
-        val s1_valid = RegNext(s0_valid && s0_suitable)
+        val s1_valid = RegNext(s0_valid && io.mem.req.valid)
         val s2_valid = RegNext(s1_valid)
         // read from tlb idx
         val s1_rdata = ram.read(r_idx, s0_valid)
@@ -269,11 +263,13 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           ccover(s2_hit && s2_hit_vec(way), s"L2_HTLB_HIT_WAY$way", s"L2 HTLB hit way$way")
         }
 
-        printf("s2_hit_entry_addr: %x\n", s2_hit_entry.addr)
+        when (s2_hit) {
+          printf("s2_hit_entry_addr: %x\n", s2_hit_entry.addr)
+        }
 
         (s2_hit, s2_error, s2_hte, Some(ram))
     }
-    printf("%d, %d, %d\n", l2_hit, l2_error, mem_resp_valid)
+    // printf("%d, %d, %d\n", l2_hit, l2_error, mem_resp_valid)
     r_hte := OptimizationBarrier(Mux(l2_hit && !l2_error, l2_hte,
                                  Mux(mem_resp_valid, pte, r_hte)))
 

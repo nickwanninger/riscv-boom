@@ -109,7 +109,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
 
     def widthMap[T <: Data](f: Int => T) = VecInit((0 until lsuWidth).map(f))
 
-    val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry(cfg.nSectors)))
+    val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry(1)))
 
     val s_ready :: s_request :: s_wait :: s_wait_invalidate :: Nil = Enum(4)
     val state = RegInit(s_ready)
@@ -135,18 +135,16 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
     val phys = widthMap(w => Mux1H(hitsVec(w) :+ !hm_enabled(w), entries.map(_.data.asTypeOf(new HTLBEntryData).phys)))
     val small = widthMap(w => Mux1H(hitsVec(w) :+ !hm_enabled(w), entries.map(_.data.asTypeOf(new HTLBEntryData).small)))
 
-    /* was for debugging
     for (w <- 0 until lsuWidth) {
         for ((e, i) <- entries.zipWithIndex) {
             for (s <- 0 until e.nSectors) {
                 when (e.valid(s)) {
                     val entry = e.data(s).asTypeOf(new HTLBEntryData)
-                    printf("Entry %d: %d,  %x, %d, %d (%x)\n", i.U, e.valid(s), e.tag, entry.addr, entry.immovable) 
+                    printf("Entry %d: %d,  %x, %x (%d), %d\n", i.U, e.valid(s), e.tag, entry.addr, entry.phys, entry.immovable) 
                 }
             }
         }
     }
-    */
 
     val htlb_hit = widthMap(w => real_hits(w).orR)
     val htlb_miss = widthMap(w => hm_enabled(w) && !htlb_hit(w))
@@ -174,11 +172,9 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
         io.resp(w).phys  := phys(w) =/= false.B && hm_enabled(w)
         io.resp(w).small := small(w)
 
-        /* was for debugging
         when (!io.resp(w).miss && !io.req(w).bits.passthrough) {
           printf("[HTLB] -> [LSU] %x %d (for %x) (paddr: %x)\n", io.resp(w).addr, io.resp(w).phys, io.req(w).bits.haddr, addr(w) + io.req(w).bits.haddr(handleBits-1,0))
         }
-        */
     }
 
     io.htw.req.valid := state === s_request
@@ -193,11 +189,11 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
         newEntry.immovable := false.B // io.htw.resp.bits.immovable
         newEntry.small := io.htw.resp.bits.hte.small
 
-        printf("New Entry: %x, %d, %d\n", newEntry.addr, newEntry.immovable, newEntry.phys)
+        printf("New Entry: %x, %d, %d, filling in (tag: %d) \n", newEntry.addr, newEntry.immovable, newEntry.phys, r_refill_tag)
 
         val waddr = Mux(r_sectored_hit, r_sectored_hit_addr, r_sectored_repl_addr)
         for ((e, i) <- entries.zipWithIndex) when (waddr === i.U) {
-            e.invalidate()
+            // e.invalidate()
             e.insert(r_refill_tag, newEntry)
         }
     }
@@ -222,10 +218,10 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p)
         when (io.tlb(w).valid) {
             /* debug print for small handlen optimization
             printf("paddr for hid %x: %x\n", hid(w), io.tlb(w).bits)
-            */
             for ((e, i) <- entries.zipWithIndex) when (e.hit(hid(w))) {
                 e.setPAddr(hid(w), io.tlb(w).bits)
             }
+            */
         }
     }
 
