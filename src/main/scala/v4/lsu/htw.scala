@@ -40,9 +40,18 @@ class HTWResp(implicit p: Parameters) extends BoomBundle()(p)
     val hte = new HTE
 }
 
+class EvictionReq(implicit p: Parameters) extends BoomBundle()(p)
+{
+    val addr = UInt(xLen.W)
+    val small = Bool()
+    val phys = Bool()
+    val hid = UInt(handleBits.W)
+}
+
 class HTLBHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
   val req = Decoupled(Valid(new HTWReq))
   val resp = Flipped(Valid(new HTWResp))
+  val evict = Decoupled(new EvictionReq)
 }
 
 class HTWPerfEvents(implicit p: Parameters) extends BoomBundle()(p) {
@@ -73,7 +82,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     })
 
     // State Machine
-    val s_ready :: s_req1 :: s_wait1 :: Nil = Enum(3)
+    val s_ready :: s_req1 :: s_wait1 :: s_victim :: Nil = Enum(4)
     val state = RegInit(s_ready)
     val next_state = WireDefault(state)
     state := OptimizationBarrier(next_state)
@@ -86,6 +95,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val invalidated = Reg(Bool())
     val r_req = Reg(new HTWReq)
     val r_hte = Reg(new HTE)
+    val v_hte = Reg(new HTE)
+    val v_hid = Reg(UInt(handleBits.W))
 
     invalidated := io.dpath.sfence.valid || (invalidated && state =/= s_ready)
 
@@ -144,9 +155,18 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     switch (state) {
         is (s_ready) {
-            next_state := Mux(io.requestor.req.valid, s_req1, s_ready)
+            next_state := Mux(io.requestor.req.valid, s_req1,
+              Mux(io.requestor.evict.valid, s_victim, s_ready))
             when (io.requestor.req.valid) {
               r_req := io.requestor.req.bits.bits
+            }
+
+            when (io.requestor.evict.valid) {
+              v_hte.addr := io.requestor.evict.bits.addr
+              v_hte.small := io.requestor.evict.bits.small
+              v_hte.frozen := false.B
+              v_hte.reserved := 0.U
+              v_hid := io.requestor.evict.bits.hid
             }
         }
         is (s_req1) {
@@ -154,6 +174,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
                 next_state := s_wait1
             }
         }
+        
     }
 
     val l2_refill = RegNext(false.B)
@@ -165,6 +186,13 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       printf("PTE - Small: %x, Frozen: %x, Reserved: %x, Addr: %x\n", pte.small, pte.frozen, pte.reserved, pte.addr)
       l2_refill := true.B
     }
+
+    when (state === s_victim) {
+          printf("Victim Entry: %d - %x\n", v_hid, v_hte.addr)
+          l2_refill := true.B
+    }
+
+    io.requestor.evict.ready := state === s_ready
 
     // TODO: clock gate for all this later
     val (l2_hit, l2_error, l2_hte, l2_htlb_ram) = {
@@ -243,7 +271,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         // decode
         val s2_entry_vec = s2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2TLBSets)))
         val s2_hit_vec = (0 until coreParams.nL2TLBWays).map(way => s2_valid_vec(way) && (r_tag === s2_entry_vec(way).tag))
-        printf("r_idx: %x, r_tag: %x, entry-vec-tag: %x\n", r_idx, r_tag, s2_entry_vec(0).tag)
+        // printf("r_idx: %x, r_tag: %x, entry-vec-tag: %x\n", r_idx, r_tag, s2_entry_vec(0).tag)
         val s2_hit = s2_valid && s2_hit_vec.orR
         io.dpath.perf.l2miss := s2_valid && !(s2_hit_vec.orR)
         io.dpath.perf.l2hit := s2_hit
@@ -271,7 +299,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     }
     // printf("%d, %d, %d\n", l2_hit, l2_error, mem_resp_valid)
     r_hte := OptimizationBarrier(Mux(l2_hit && !l2_error, l2_hte,
-                                 Mux(mem_resp_valid, pte, r_hte)))
+                                 Mux(mem_resp_valid, pte, 
+                                 Mux(state === s_victim, v_hte, r_hte))))
 
   when (l2_hit && !l2_error && state === s_wait1) {
     next_state := s_ready
