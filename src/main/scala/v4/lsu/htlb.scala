@@ -45,39 +45,28 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val small = Bool()
   }
 
-  class Entry(val nSectors: Int) extends Bundle {
-    require(isPow2(nSectors))
-
+  class Entry() extends Bundle {
     val tag = UInt(handleBits.W)
-    val data = Vec(nSectors, UInt(new HTLBEntryData().getWidth.W))
-    val valid = Vec(nSectors, Bool())
-    def entry_data = data.map(_.asTypeOf(new HTLBEntryData))
+    val data = UInt(new HTLBEntryData().getWidth.W)
+    val valid = Bool()
 
-    private def sectorIdx(hid: UInt) = hid.extract(log2Ceil(nSectors) - 1, 0)
-    def getData(hid: UInt) = data(sectorIdx(hid)).asTypeOf(new HTLBEntryData)
-    def sectorHit(hid: UInt) = valid.orR && sectorTagMatch(hid)
-    def sectorTagMatch(hid: UInt) = ((tag ^ hid) >> log2Ceil(nSectors)) === 0.U
+    def getData() = data.asTypeOf(new HTLBEntryData)
     def hit(hid: UInt) = {
-      val idx = sectorIdx(hid)
-      valid(idx) && sectorTagMatch(hid)
+      valid && tag === hid
     }
 
     def ppn(hid: UInt) = {
-      getData(hid).addr
+      getData().addr
     }
 
     def insert(hid: UInt, entry: HTLBEntryData) = {
       this.tag := hid
 
-      val idx = sectorIdx(hid)
-      valid(idx) := true.B
-      data(idx) := entry.asUInt
+      valid := true.B
+      data := entry.asUInt
     }
 
-    def invalidate() = { valid.foreach(_ := false.B) }
-    def invalidateHID(hid: UInt) = {
-      when(sectorTagMatch(hid)) { valid(sectorIdx(hid)) := false.B }
-    }
+    def invalidate() = { valid := false.B }
 
     // def invalidateNonGlobal() = {
     //     for ((v, e) <- valid zip entry_data)
@@ -85,28 +74,26 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     // }
 
     def lock(hid: UInt) = {
-      getData(hid).immovable := true.B
+      getData().immovable := true.B
     }
 
     def unlock(hid: UInt) = {
-      getData(hid).immovable := false.B
+      getData().immovable := false.B
     }
 
-    def setPAddr(hid: UInt, paddr: UInt) = {
+    def setPAddr(paddr: UInt) = {
       // FIXME: this doesn't feel right? this isn't combinational right?
-      val idx = sectorIdx(hid)
-
-      val entry = getData(hid)
+      val entry = WireDefault(getData())
       entry.addr := paddr
       entry.phys := true.B
 
-      data(idx) := entry.asUInt
+      data := entry.asUInt
     }
   }
 
   def widthMap[T <: Data](f: Int => T) = VecInit((0 until lsuWidth).map(f))
 
-  val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry(1)))
+  val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry()))
 
   val s_ready :: s_request :: s_wait :: s_wait_invalidate :: Nil = Enum(4)
   val state = RegInit(s_ready)
@@ -123,7 +110,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val fire_compactor = Reg(Bool())
 
   val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleBits + 1))
-  val sector_hits = widthMap(w => VecInit(entries.map(_.sectorHit(hid(w)))))
   val hitsVec =
     widthMap(w => VecInit(entries.map(hm_enabled(w) && _.hit(hid(w)))))
   val real_hits = widthMap(w => hitsVec(w).asUInt)
@@ -150,34 +136,30 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   for (w <- 0 until lsuWidth) {
     for ((e, i) <- entries.zipWithIndex) {
-      for (s <- 0 until e.nSectors) {
-        when(e.valid(s)) {
-          val entry = e.data(s).asTypeOf(new HTLBEntryData)
+        when(e.valid) {
+          val entry = e.data.asTypeOf(new HTLBEntryData)
           printf(
             "Entry %d: %d,  %x, %x (%d), %d\n",
             i.U,
-            e.valid(s),
+            e.valid,
             e.tag,
             entry.addr,
             entry.phys,
             entry.immovable
           )
         }
-      }
     }
   }
 
   val htlb_hit = widthMap(w => real_hits(w).orR)
   val htlb_miss = widthMap(w => hm_enabled(w) && !htlb_hit(w))
 
-  val victim_entry = Reg(new Entry(1))
+  val victim_entry = Reg(new Entry())
 
   val sectored_plru = new PseudoLRU(entries.size)
   for (w <- 0 until lsuWidth) {
     when(io.req(w).valid && hm_enabled(w)) {
-      when(sector_hits(w).orR) {
-        sectored_plru.access(OHToUInt(sector_hits(w)))
-      }
+      sectored_plru.access(OHToUInt(real_hits(w)))
     }
   }
 
@@ -256,8 +238,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       r_refill_tag := hid(w)
 
       r_sectored_repl_addr := replacementEntry(entries, sectored_plru.way)
-      r_sectored_hit_addr := OHToUInt(sector_hits(w))
-      r_sectored_hit := sector_hits(w).orR
+      r_sectored_hit_addr := OHToUInt(real_hits(w))
+      r_sectored_hit := real_hits(w).orR
     }
 
     when(io.htw.req.valid) {
