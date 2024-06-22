@@ -97,10 +97,14 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   val s_ready :: s_request :: s_wait :: s_wait_invalidate :: Nil = Enum(4)
   val state = RegInit(s_ready)
+  val next_state = WireDefault(state)
+  state := OptimizationBarrier(next_state)
   val r_refill_tag = Reg(UInt(handleBits.W))
   val r_sectored_repl_addr = Reg(UInt(log2Ceil(entries.size).W))
   val r_sectored_hit_addr = Reg(UInt(log2Ceil(entries.size).W))
   val r_sectored_hit = Reg(Bool())
+
+  val victim = RegInit(false.B)
 
   val hm_enabled = widthMap(w => !io.req(w).bits.passthrough)
 
@@ -185,11 +189,11 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
     when(!io.resp(w).miss && !io.req(w).bits.passthrough) {
       printf(
-        "[HTLB] -> [LSU] %x %d (for %x) (paddr: %x)\n",
+        "[HTLB] -> [LSU] %x %d (for %x)\n", // (paddr: %x)\n",
         io.resp(w).addr,
         io.resp(w).phys,
         io.req(w).bits.haddr,
-        addr(w) + io.req(w).bits.haddr(handleBits - 1, 0)
+        // addr(w) + io.req(w).bits.haddr(handleBits - 1, 0)
       )
     }
   }
@@ -216,8 +220,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
     val waddr = Mux(r_sectored_hit, r_sectored_hit_addr, r_sectored_repl_addr)
     for ((e, i) <- entries.zipWithIndex) when(waddr === i.U) {
-        state := s_wait_invalidate
-        printf("State: %d\n", state)
+        victim := true.B
         victim_entry := RegNext(e)
         // send entry to L2
         e.invalidate()
@@ -234,7 +237,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         .bits
         .passthrough
     ) {
-      state := s_request
+      next_state := s_request
       r_refill_tag := hid(w)
 
       r_sectored_repl_addr := replacementEntry(entries, sectored_plru.way)
@@ -258,28 +261,28 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   }
 
   when(state === s_request) {
-    when(sfence) { state := s_ready }
-    when(io.htw.req.ready) { state := Mux(sfence, s_wait_invalidate, s_wait) }
+    when(sfence) { next_state := s_ready }
+    when(io.htw.req.ready) { next_state := Mux(sfence, s_wait_invalidate, s_wait) }
   }
 
   when(state === s_wait && sfence) {
-    state := s_wait_invalidate
+    next_state := s_wait_invalidate
   }
   when(io.htw.resp.valid) {
-    state := s_ready
+    next_state := s_ready
   }
 
-  val vic = victim_entry.data(0).asTypeOf(new HTLBEntryData)
+  val vic = victim_entry.data.asTypeOf(new HTLBEntryData)
 
-  io.htw.evict.valid := (state === s_wait_invalidate)
+  when (io.htw.evict.valid) {
+    printf("Victim Entry (%x): %x, %d, %d\n", victim_entry.tag, vic.addr, vic.phys, vic.small)
+  }
+
+  io.htw.evict.valid := victim && victim_entry.valid
   io.htw.evict.bits.addr := vic.addr
   io.htw.evict.bits.small := vic.small
   io.htw.evict.bits.phys := vic.phys
   io.htw.evict.bits.hid := victim_entry.tag
-
-  when(state === s_wait_invalidate && io.htw.evict.ready) {
-    state := s_request
-  }
 
   when(sfence) {
     for (w <- 0 until lsuWidth) {
@@ -294,10 +297,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         }
       }
     }
-  }
-
-  when(io.htw.resp.valid) {
-    state := s_ready
   }
 
   def replacementEntry(set: Seq[Entry], alt: UInt) = {

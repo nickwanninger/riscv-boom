@@ -82,13 +82,16 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     })
 
     // State Machine
-    val s_ready :: s_req1 :: s_wait1 :: s_victim :: Nil = Enum(4)
+    val s_ready :: s_req1 :: s_wait1 :: Nil = Enum(3)
     val state = RegInit(s_ready)
     val next_state = WireDefault(state)
     state := OptimizationBarrier(next_state)
     val l2_refill_wire = Wire(Bool())
 
-    val resp_valid = RegNext(VecInit(Seq.fill(1)(false.B)))
+    val resp_valid = RegNext(false.B)
+    val victim = RegInit(false.B)
+    val next_victim_state = WireDefault(victim)
+    victim := OptimizationBarrier(next_victim_state)
 
     io.requestor.req.ready := (state === s_ready) && !l2_refill_wire
 
@@ -144,7 +147,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     // Send completed request to HTLB
     // TODO: what if the HTE is invalid?
-    io.requestor.resp.valid := resp_valid(0)
+    io.requestor.resp.valid := resp_valid
     io.requestor.resp.bits.hte := r_hte
 
     /* debug print for response from HTW */
@@ -156,11 +159,12 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     switch (state) {
         is (s_ready) {
             next_state := Mux(io.requestor.req.valid, s_req1,
-              Mux(io.requestor.evict.valid, s_victim, s_ready))
+               s_ready)
             when (io.requestor.req.valid) {
               r_req := io.requestor.req.bits.bits
             }
 
+            next_victim_state := Mux(io.requestor.evict.valid, true.B, false.B)
             when (io.requestor.evict.valid) {
               v_hte.addr := io.requestor.evict.bits.addr
               v_hte.small := io.requestor.evict.bits.small
@@ -184,10 +188,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val pte = WireDefault(tmp)
     when (mem_resp_valid) {
       printf("PTE - Small: %x, Frozen: %x, Reserved: %x, Addr: %x\n", pte.small, pte.frozen, pte.reserved, pte.addr)
-      l2_refill := true.B
+      // l2_refill := true.B
     }
 
-    when (state === s_victim) {
+    when (victim) {
           printf("Victim Entry: %d - %x\n", v_hid, v_hte.addr)
           l2_refill := true.B
     }
@@ -227,10 +231,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         // refill with r_pte(leaf pte)
         when (l2_refill && !invalidated) {
           val entry = Wire(new L2HTLBEntry(nL2TLBSets))
-          entry.small := r_hte.small
-          entry.frozen := r_hte.frozen
-          entry.addr := r_hte.addr
-          entry.tag := r_tag
+          entry.small := v_hte.small
+          entry.frozen := v_hte.frozen
+          entry.addr := v_hte.addr
+          entry.tag := v_hid
           // if all the way are valid, use plru to select one way to be replaced,
           // otherwise use PriorityEncoderOH to select one
           val wmask = if (coreParams.nL2TLBWays > 1) Mux(r_valid_vec_q.andR, UIntToOH(r_l2_plru_way, coreParams.nL2TLBWays), PriorityEncoderOH(~r_valid_vec_q)) else 1.U(1.W)
@@ -244,6 +248,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
             //   g(way) := Mux(r_pte.g, g(way) | mask, g(way) & ~mask)
             }
           }
+          next_state := Mux(io.requestor.req.valid, s_wait1,
+            Mux(io.requestor.evict.valid, s_ready, state))
         }
         // TODO: sfence happens
         /*
@@ -297,14 +303,13 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
         (s2_hit, s2_error, s2_hte, Some(ram))
     }
-    // printf("%d, %d, %d\n", l2_hit, l2_error, mem_resp_valid)
+    printf("%d, %d, %d\n", l2_hit, l2_error, mem_resp_valid)
     r_hte := OptimizationBarrier(Mux(l2_hit && !l2_error, l2_hte,
-                                 Mux(mem_resp_valid, pte, 
-                                 Mux(state === s_victim, v_hte, r_hte))))
+                                 Mux(mem_resp_valid, pte, r_hte)))
 
-  when (l2_hit && !l2_error && state === s_wait1) {
+  when ((l2_hit && !l2_error && state === s_wait1) || mem_resp_valid) {
     next_state := s_ready
-    resp_valid(0) := true.B
+    resp_valid := true.B
   }
 
   io.dpath.perf.l2hit := false.B
