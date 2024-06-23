@@ -33,12 +33,11 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val req = Flipped(Vec(lsuWidth, Decoupled(new HTLBReq)))
     val resp = Vec(lsuWidth, new HTLBResp)
     val htw = new HTLBHTWIO
-    val tlb = Flipped(Vec(lsuWidth, Decoupled(UInt(ppnBits.W))))
+    val tlb = Flipped(Vec(lsuWidth, Valid(UInt(ppnBits.W))))
     val sfence = Input(Valid(new SFenceReq))
   })
 
   class HTLBEntryData() extends Bundle() {
-    // val g = Bool()
     val phys = Bool()
     val addr = UInt(xLen.W)
     val immovable = Bool()
@@ -68,11 +67,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
     def invalidate() = { valid := false.B }
 
-    // def invalidateNonGlobal() = {
-    //     for ((v, e) <- valid zip entry_data)
-    //       when (!e.g) { v := false.B }
-    // }
-
     def lock(hid: UInt) = {
       getData().immovable := true.B
     }
@@ -91,34 +85,58 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
   }
 
+  // Utilities
   def widthMap[T <: Data](f: Int => T) = VecInit((0 until lsuWidth).map(f))
+  val hm_enabled = widthMap(w => !io.req(w).bits.passthrough)
+  val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleBits + 1))
 
+  
+  // L1 TLB Entries
   val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry()))
 
+  // State Machine
   val s_ready :: s_request :: s_wait :: s_wait_invalidate :: Nil = Enum(4)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   state := OptimizationBarrier(next_state)
+
+  // Refill State
+  val do_refill = io.htw.resp.valid
   val r_refill_tag = Reg(UInt(handleBits.W))
   val r_sectored_repl_addr = Reg(UInt(log2Ceil(entries.size).W))
   val r_sectored_hit_addr = Reg(UInt(log2Ceil(entries.size).W))
   val r_sectored_hit = Reg(Bool())
 
-  val victim = RegInit(false.B)
-
-  val hm_enabled = widthMap(w => !io.req(w).bits.passthrough)
-
-  val do_refill = io.htw.resp.valid
-
-  // HTLB Statistic Counters
-  val fire_compactor = Reg(Bool())
-
-  val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleBits + 1))
+  // Hit Logic
   val hitsVec =
     widthMap(w => VecInit(entries.map(hm_enabled(w) && _.hit(hid(w)))))
   val real_hits = widthMap(w => hitsVec(w).asUInt)
-  // val hits = widthMap(w => Cat(!hm_enabled(w), real_hits(w)))
+  val htlb_hit = widthMap(w => real_hits(w).orR)
+  val htlb_miss = widthMap(w => hm_enabled(w) && !htlb_hit(w))
 
+  val sectored_plru = new PseudoLRU(entries.size)
+  for (w <- 0 until lsuWidth) {
+    when(io.req(w).valid && hm_enabled(w)) {
+      sectored_plru.access(OHToUInt(real_hits(w)))
+    }
+  }
+
+  // Miss Logic
+  val victim = RegInit(false.B)
+  val victim_entry = Reg(new Entry())
+  val vic = victim_entry.data.asTypeOf(new HTLBEntryData)
+
+  when(io.htw.evict.valid) {
+    printf("Victim Entry (%x): %x, %d, %d\n", victim_entry.tag, vic.addr, vic.phys, vic.small)
+  }
+
+  io.htw.evict.valid := victim && victim_entry.valid
+  io.htw.evict.bits.hid := victim_entry.tag
+  io.htw.evict.bits.addr := vic.addr
+  io.htw.evict.bits.phys := vic.phys
+  io.htw.evict.bits.small := vic.small
+
+  // Utilities to help respond
   val addr = widthMap(w =>
     Mux1H(
       hitsVec(w) :+ !hm_enabled(w),
@@ -138,35 +156,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     )
   )
 
-  for (w <- 0 until lsuWidth) {
-    for ((e, i) <- entries.zipWithIndex) {
-        when(e.valid) {
-          val entry = e.data.asTypeOf(new HTLBEntryData)
-          printf(
-            "Entry %d: %d,  %x, %x (%d), %d\n",
-            i.U,
-            e.valid,
-            e.tag,
-            entry.addr,
-            entry.phys,
-            entry.immovable
-          )
-        }
-    }
-  }
-
-  val htlb_hit = widthMap(w => real_hits(w).orR)
-  val htlb_miss = widthMap(w => hm_enabled(w) && !htlb_hit(w))
-
-  val victim_entry = Reg(new Entry())
-
-  val sectored_plru = new PseudoLRU(entries.size)
-  for (w <- 0 until lsuWidth) {
-    when(io.req(w).valid && hm_enabled(w)) {
-      sectored_plru.access(OHToUInt(real_hits(w)))
-    }
-  }
-
+  // Send response to LSU
   for (w <- 0 until lsuWidth) {
     // handle original case
     val sum = io.req(w).bits.haddr
@@ -189,48 +179,18 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
     when(!io.resp(w).miss && !io.req(w).bits.passthrough) {
       printf(
-        "[HTLB] -> [LSU] %x %d (for %x)\n", // (paddr: %x)\n",
+        "[HTLB] -> [LSU] %x %d (for %x) (paddr: %x)\n",
         io.resp(w).addr,
         io.resp(w).phys,
         io.req(w).bits.haddr,
-        // addr(w) + io.req(w).bits.haddr(handleBits - 1, 0)
+        addr(w) + io.req(w).bits.haddr(handleBits - 1, 0)
       )
     }
   }
 
-  io.htw.req.valid := state === s_request
-  io.htw.req.bits.valid := true.B
-  io.htw.req.bits.bits.hid := r_refill_tag
-
-  when(do_refill) {
-    val newEntry = Wire(new HTLBEntryData)
-    // newEntry.g := false.B
-    newEntry.phys := false.B
-    newEntry.addr := io.htw.resp.bits.hte.addr
-    newEntry.immovable := false.B // io.htw.resp.bits.immovable
-    newEntry.small := io.htw.resp.bits.hte.small
-
-    printf(
-      "New Entry: %x, %d, %d, filling in (tag: %d) \n",
-      newEntry.addr,
-      newEntry.immovable,
-      newEntry.phys,
-      r_refill_tag
-    )
-
-    val waddr = Mux(r_sectored_hit, r_sectored_hit_addr, r_sectored_repl_addr)
-    for ((e, i) <- entries.zipWithIndex) when(waddr === i.U) {
-        victim := true.B
-        victim_entry := RegNext(e)
-        // send entry to L2
-        e.invalidate()
-      e.insert(r_refill_tag, newEntry)
-    }
-  }
-
+  // Finite State Machine Logic
   val sfence = io.sfence.valid
   for (w <- 0 until lsuWidth) {
-    // printf("[HTLB] State: %d, %d, %d, %d (hid: %d)\n", io.req(w).fire, htlb_miss(w), state, !io.req(w).bits.passthrough, hid(w))
     when(
       io.req(w).fire && htlb_miss(w) && state === s_ready && !io
         .req(w)
@@ -249,7 +209,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       printf("[HTLB] -> [HTW] Looking up hid: %x\n", io.htw.req.bits.bits.hid)
     }
 
-    io.tlb(w).ready := true.B
     when(io.tlb(w).valid) {
       /* debug print for small handlen optimization
             printf("paddr for hid %x: %x\n", hid(w), io.tlb(w).bits)
@@ -262,28 +221,20 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   when(state === s_request) {
     when(sfence) { next_state := s_ready }
-    when(io.htw.req.ready) { next_state := Mux(sfence, s_wait_invalidate, s_wait) }
+    when(io.htw.req.ready) {
+      next_state := Mux(sfence, s_wait_invalidate, s_wait)
+    }
   }
 
   when(state === s_wait && sfence) {
     next_state := s_wait_invalidate
   }
+
   when(io.htw.resp.valid) {
     next_state := s_ready
   }
 
-  val vic = victim_entry.data.asTypeOf(new HTLBEntryData)
-
-  when (io.htw.evict.valid) {
-    printf("Victim Entry (%x): %x, %d, %d\n", victim_entry.tag, vic.addr, vic.phys, vic.small)
-  }
-
-  io.htw.evict.valid := victim && victim_entry.valid
-  io.htw.evict.bits.addr := vic.addr
-  io.htw.evict.bits.small := vic.small
-  io.htw.evict.bits.phys := vic.phys
-  io.htw.evict.bits.hid := victim_entry.tag
-
+  // TODO: figure out sfence here
   when(sfence) {
     for (w <- 0 until lsuWidth) {
       // TODO: add some assertion here?
@@ -299,6 +250,37 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
   }
 
+  // Send request to L2 HTLB if miss
+  io.htw.req.valid := state === s_request
+  io.htw.req.bits.valid := true.B
+  io.htw.req.bits.bits.hid := r_refill_tag
+
+  // Refill L1 HTLB once L2 HTLB responds
+  when(do_refill) {
+    val newEntry = Wire(new HTLBEntryData)
+    newEntry.phys := false.B
+    newEntry.addr := io.htw.resp.bits.hte.addr
+    newEntry.immovable := false.B // io.htw.resp.bits.immovable
+    newEntry.small := io.htw.resp.bits.hte.small
+
+    printf(
+      "New Entry: %x, %d, %d, filling in (tag: %d) \n",
+      newEntry.addr,
+      newEntry.immovable,
+      newEntry.phys,
+      r_refill_tag
+    )
+
+    val waddr = Mux(r_sectored_hit, r_sectored_hit_addr, r_sectored_repl_addr)
+    for ((e, i) <- entries.zipWithIndex) when(waddr === i.U) {
+      // make a copy of the victim entry, and set the victim flag to notify the L2 HTLB
+      victim := true.B
+      victim_entry := RegNext(e)
+      e.invalidate()
+      e.insert(r_refill_tag, newEntry)
+    }
+  }
+
   def replacementEntry(set: Seq[Entry], alt: UInt) = {
     val valids = set.map(_.valid).asUInt
     Mux(valids.andR, alt, PriorityEncoder(~valids))
@@ -306,5 +288,22 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   when(reset.asBool) {
     entries.foreach(_.invalidate())
+  }
+
+  for (w <- 0 until lsuWidth) {
+    for ((e, i) <- entries.zipWithIndex) {
+      when(e.valid) {
+        val entry = e.data.asTypeOf(new HTLBEntryData)
+        printf(
+          "Entry %d: %d,  %x, %x (%d), %d\n",
+          i.U,
+          e.valid,
+          e.tag,
+          entry.addr,
+          entry.phys,
+          entry.immovable
+        )
+      }
+    }
   }
 }
