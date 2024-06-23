@@ -74,11 +74,20 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     def setPAddr(ppn: UInt, valid: Bool) = {
       val tmp_ppn = RegInit(ppn)
       val new_entry = Wire(new HTLBEntryData())
-      new_entry.addr := Mux(valid, Cat(tmp_ppn, getData().addr(11, 0)), getData().addr)
+      new_entry.addr := Mux(
+        valid,
+        Cat(tmp_ppn, getData().addr(11, 0)),
+        getData().addr
+      )
       new_entry.immovable := getData().immovable
       new_entry.small := getData().small
       new_entry.phys := true.B
-      printf("New Entry: %x, %d, %d\n", new_entry.addr, new_entry.immovable, new_entry.phys)
+      printf(
+        "New Entry: %x, %d, %d\n",
+        new_entry.addr,
+        new_entry.immovable,
+        new_entry.phys
+      )
 
       data := new_entry.asUInt
     }
@@ -237,19 +246,10 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     next_state := s_ready
   }
 
-  // TODO: figure out sfence here
   when(sfence) {
-    for (w <- 0 until lsuWidth) {
-      // TODO: add some assertion here?
-      // TODO: what invalidations do we need to support? 1. individual hid, 2. all, (optional 3. non-global but not a problem now)
-      // assert(!io.sfence.bits.rs1 || (io.sfence.bits.addr >> pgIdxBits) === vpn(w))
-      for (e <- entries) {
-        when(io.sfence.bits.rs1) {
-          e.invalidate()
-        }.otherwise {
-          e.invalidate()
-        }
-      }
+    printf("[HTLB] Invalidating all entries\n")
+    for (e <- entries) {
+      e.invalidate()
     }
   }
 

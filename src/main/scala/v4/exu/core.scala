@@ -306,6 +306,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   custom_csrs.csrs.foreach { c => c.stall := false.B; c.set := false.B; c.sdata := DontCare }
   (custom_csrs.csrs zip csr.io.customCSRs).map { case (lhs, rhs) => lhs <> rhs }
   io.ifu.enable_bpd := custom_csrs.enableBPD
+  io.htw.customCSRs <> custom_csrs
 
   //val icache_blocked = !(io.ifu.fetchpacket.valid || RegNext(io.ifu.fetchpacket.valid))
   val icache_blocked = false.B
@@ -1354,7 +1355,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   coreMonitorBundle.reset  := reset
 
 
-  io.htw.htBase := custom_csrs.htBase
   io.lsu.htBase := custom_csrs.htBase
 
   //-------------------------------------------------------------
