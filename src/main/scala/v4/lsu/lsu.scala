@@ -898,13 +898,12 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   for (w <- 0 until lsuWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr, "[lsu] paddrs should match.")
 
-    /* debug for printing paddr for small handle optimization
+    // debug for printing paddr for small handle optimization
     when (!exe_tlb_miss(w) && !exe_h_passthr(w)) {
      printf("exe_tlb_paddr(%d): %x, htlb: %x: \n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr)
     }
-    */
     htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w)
-    htlb.io.tlb(w).bits := exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits)
+    htlb.io.tlb(w).bits := exe_tlb_paddr(w)(paddrBits-1, 12)
 
     when (mem_xcpt_valids(w))
     {

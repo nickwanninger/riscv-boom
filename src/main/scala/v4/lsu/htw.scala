@@ -333,7 +333,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     (s2_hit, s2_error, s2_hte, Some(ram))
   }
-  printf("%d, %d, %d\n", l2_hit, l2_error, mem_resp_valid)
+  // printf("%d, %d, %d\n", l2_hit, l2_error, mem_resp_valid)
 
   r_hte := OptimizationBarrier(
     Mux(l2_hit && !l2_error, l2_hte, Mux(mem_resp_valid, pte, r_hte))

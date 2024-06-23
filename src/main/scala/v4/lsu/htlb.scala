@@ -54,10 +54,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       valid && tag === hid
     }
 
-    def ppn(hid: UInt) = {
-      getData().addr
-    }
-
     def insert(hid: UInt, entry: HTLBEntryData) = {
       this.tag := hid
 
@@ -75,13 +71,16 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       getData().immovable := false.B
     }
 
-    def setPAddr(paddr: UInt) = {
-      // FIXME: this doesn't feel right? this isn't combinational right?
-      val entry = WireDefault(getData())
-      entry.addr := paddr
-      entry.phys := true.B
+    def setPAddr(ppn: UInt, valid: Bool) = {
+      val tmp_ppn = RegInit(ppn)
+      val new_entry = Wire(new HTLBEntryData())
+      new_entry.addr := Mux(valid, Cat(tmp_ppn, getData().addr(11, 0)), getData().addr)
+      new_entry.immovable := getData().immovable
+      new_entry.small := getData().small
+      new_entry.phys := true.B
+      printf("New Entry: %x, %d, %d\n", new_entry.addr, new_entry.immovable, new_entry.phys)
 
-      data := entry.asUInt
+      data := new_entry.asUInt
     }
   }
 
@@ -90,7 +89,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val hm_enabled = widthMap(w => !io.req(w).bits.passthrough)
   val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleBits + 1))
 
-  
   // L1 TLB Entries
   val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry()))
 
@@ -127,7 +125,13 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val vic = victim_entry.data.asTypeOf(new HTLBEntryData)
 
   when(io.htw.evict.valid) {
-    printf("Victim Entry (%x): %x, %d, %d\n", victim_entry.tag, vic.addr, vic.phys, vic.small)
+    printf(
+      "Victim Entry (%x): %x, %d, %d\n",
+      victim_entry.tag,
+      vic.addr,
+      vic.phys,
+      vic.small
+    )
   }
 
   io.htw.evict.valid := victim && victim_entry.valid
@@ -210,12 +214,11 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
 
     when(io.tlb(w).valid) {
-      /* debug print for small handlen optimization
-            printf("paddr for hid %x: %x\n", hid(w), io.tlb(w).bits)
-            for ((e, i) <- entries.zipWithIndex) when (e.hit(hid(w))) {
-                e.setPAddr(hid(w), io.tlb(w).bits)
-            }
-       */
+      // debug print for small handlen optimization
+      printf("paddr for hid %x: %x\n", hid(w), io.tlb(w).bits)
+      for ((e, i) <- entries.zipWithIndex) when(e.hit(hid(w))) {
+        e.setPAddr(io.tlb(w).bits, io.tlb(w).valid)
+      }
     }
   }
 
