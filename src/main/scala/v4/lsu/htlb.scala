@@ -96,7 +96,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   // Utilities
   def widthMap[T <: Data](f: Int => T) = VecInit((0 until lsuWidth).map(f))
   val hm_enabled = widthMap(w => !io.req(w).bits.passthrough)
-  val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleBits + 1))
+  val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleBits))
 
   // L1 TLB Entries
   val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry()))
@@ -185,7 +185,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     io.resp(w).addr := Mux(
       io.req(w).bits.passthrough,
       effective_address,
-      addr(w) + io.req(w).bits.haddr(handleBits, 0)
+      addr(w) + io.req(w).bits.haddr(handleBits-1, 0)
     )
     io.resp(w).phys := phys(w) =/= false.B && hm_enabled(w)
     io.resp(w).small := small(w)
