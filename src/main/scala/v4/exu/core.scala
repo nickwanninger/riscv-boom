@@ -68,7 +68,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.ptw_tlb := DontCare
   io.ptw := DontCare
   io.ifu := DontCare
-  io.htw.sfence := DontCare
+  io.htw := DontCare
 
   //**********************************
   // construct all of the modules
@@ -1365,6 +1365,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.ptw.status     := csr.io.status
   io.ptw.pmp        := csr.io.pmp
   io.ptw.sfence     := io.ifu.sfence
+  io.htw.sfence     := io.ifu.sfence
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

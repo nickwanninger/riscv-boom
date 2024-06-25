@@ -401,7 +401,6 @@ class UniqueExeUnit(
     s.valid    := RegNext(exe_uop.valid && exe_uop.bits.uopc === uopSFENCE)
     s.bits.rs1 := RegNext(exe_uop.bits.pimm(0))
     s.bits.rs2 := RegNext(exe_uop.bits.pimm(1))
-    s.bits.rs3 := RegNext(exe_uop.bits.pimm(2))
     s.bits.addr := RegNext(exe_rs1_data)
     s.bits.asid := RegNext(exe_rs2_data)
     s.bits.hv := RegNext(exe_uop.bits.mem_cmd === M_HFENCEV)

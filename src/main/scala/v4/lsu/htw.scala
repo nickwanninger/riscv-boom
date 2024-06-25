@@ -49,6 +49,7 @@ class HTLBHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
   val req = Decoupled(Valid(new HTWReq))
   val resp = Flipped(Valid(new HTWResp))
   val evict = Decoupled(new EvictionReq)
+  val evict_resp = Input(Bool())
 }
 
 class HTWPerfEvents(implicit p: Parameters) extends BoomBundle()(p) {
@@ -168,6 +169,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       )
     }
 
+    io.requestor.evict.ready := state === s_ready
+
     // Finite State Machine Logic
     switch(state) {
       is(s_ready) {
@@ -188,6 +191,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           v_hte.small := io.requestor.evict.bits.small
           v_hid := io.requestor.evict.bits.hid
         }
+      }
+      is(s_victim) {
+        next_state := Mux(io.dpath.sfence.valid, s_ready, 
+                          Mux(invalidated, s_ready, s_victim))
       }
     }
 
@@ -354,6 +361,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     when(!l2_hit && !l2_error && state === s_req) {
       next_state := s_wait
     }
+
+    io.requestor.evict_resp := l2_refill && !invalidated
 
     io.dpath.perf.l2hit := l2_hit && !l2_error
     io.dpath.perf.l2miss := !l2_hit && !l2_error && mem_resp_valid
