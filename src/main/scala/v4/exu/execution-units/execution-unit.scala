@@ -30,6 +30,7 @@ import freechips.rocketchip.util._
 import boom.v4.common._
 import boom.v4.ifu.FTQInfo
 import boom.v4.util._
+import boom.v4.lsu.SHFenceReq
 
 
 class Wakeup(implicit p: Parameters) extends BoomBundle
@@ -382,7 +383,7 @@ class UniqueExeUnit(
     None
   }
 
-  val (io_csr_resp, io_sfence) = if (hasCSR) {
+  val (io_csr_resp, io_sfence, io_shfence) = if (hasCSR) {
     fu_types += ((FC_CSR, true.B, "CSR"))
     val alu = Module(new ALUUnit(dataWidth = xLen))
     alu.io.req.valid := exe_uop.valid && exe_uop.bits.fu_code(FC_CSR)
@@ -406,11 +407,14 @@ class UniqueExeUnit(
     s.bits.hv := RegNext(exe_uop.bits.mem_cmd === M_HFENCEV)
     s.bits.hg := RegNext(exe_uop.bits.mem_cmd === M_HFENCEG)
 
-    (Some(c), Some(s))
+    val h = IO(Valid(new SHFenceReq))
+    h.valid    := RegNext(exe_uop.valid && exe_uop.bits.uopc === uopSHFENCE)
+
+    (Some(c), Some(s), Some(h))
   } else {
     assert(!(exe_uop.valid && exe_uop.bits.fu_code(FC_CSR)))
     assert(!(exe_uop.valid && exe_uop.bits.uopc === uopSFENCE))
-    (None, None)
+    (None, None, None)
   }
 
   val (io_rocc_resp, io_rocc_core) = if (hasRocc) {

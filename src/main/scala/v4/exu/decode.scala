@@ -142,6 +142,7 @@ object DecodeTables
     CSRRSI             -> List(Y, N, uopCSRRSI , fc2oh(FC_CSR) , RT_FIX, RT_X  , RT_X  , N, IS_I, N, N, N, M_X     , Y, Y, CSR.S, DW_XPR, aluFn.FN_ADD ),
     CSRRCI             -> List(Y, N, uopCSRRCI , fc2oh(FC_CSR) , RT_FIX, RT_X  , RT_X  , N, IS_I, N, N, N, M_X     , Y, Y, CSR.C, DW_XPR, aluFn.FN_ADD ),
 
+    SHFENCE_VMA          ->List(Y, N, uopSHFENCE, fc2oh(FC_CSR) , RT_X  , RT_FIX, RT_FIX, N, IS_N, N, N, N,M_SHFENCE , Y, Y, CSR.R, DW_XPR, aluFn.FN_ADD ),
     SFENCE_VMA          ->List(Y, N, uopSFENCE , fc2oh(FC_CSR) , RT_X  , RT_FIX, RT_FIX, N, IS_N, N, N, N,M_SFENCE , Y, Y, CSR.R, DW_XPR, aluFn.FN_ADD ),
     ECALL              -> List(Y, N, uopSCALL  , fc2oh(FC_CSR) , RT_X  , RT_X  , RT_X  , N, IS_I, N, N, N, M_X     , Y, Y, CSR.I, DW_XPR, aluFn.FN_ADD ),
     EBREAK             -> List(Y, N, uopSBREAK , fc2oh(FC_CSR) , RT_X  , RT_X  , RT_X  , N, IS_I, N, N, N, M_X     , Y, Y, CSR.I, DW_XPR, aluFn.FN_ADD ),
@@ -387,6 +388,8 @@ class DecodeUnit(implicit p: Parameters) extends BoomModule
   val system_insn = cs.csr_cmd === CSR.I
   val sfence = inst === SFENCE_VMA
 
+  val shfence = inst === SHFENCE_VMA
+
   val cs_legal = cs.legal
 //   dontTouch(cs_legal)
 
@@ -397,7 +400,7 @@ class DecodeUnit(implicit p: Parameters) extends BoomModule
     (cs.uopc === uopROCC && io.csr_decode.rocc_illegal) ||
     (cs.is_amo && !io.status.isa('a'-'a'))  ||
     (csr_en && (io.csr_decode.read_illegal || !csr_ren && io.csr_decode.write_illegal)) ||
-    ((sfence || system_insn) && io.csr_decode.system_illegal))
+    ((sfence || system_insn || shfence) && io.csr_decode.system_illegal))
 //     cs.div && !csr.io.status.isa('m'-'a') || TODO check for illegal div instructions
 
   def checkExceptions(x: Seq[(Bool, UInt)]) =
@@ -454,7 +457,7 @@ class DecodeUnit(implicit p: Parameters) extends BoomModule
   uop.fp_val     := cs.fp_val
 
   uop.mem_cmd    := cs.mem_cmd
-  uop.mem_size   := Mux(cs.mem_cmd.isOneOf(M_SFENCE, M_FLUSH_ALL), Cat(LRS2 =/= 0.U, LRS1 =/= 0.U), inst(13,12))
+  uop.mem_size   := Mux(cs.mem_cmd.isOneOf(M_SFENCE, M_FLUSH_ALL, M_SHFENCE), Cat(LRS2 =/= 0.U, LRS1 =/= 0.U), inst(13,12))
   uop.mem_signed := !inst(14)
   uop.uses_ldq   := cs.uses_ldq
   uop.uses_stq   := cs.uses_stq

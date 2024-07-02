@@ -26,6 +26,7 @@ import freechips.rocketchip.util.property._
 import boom.v4.common._
 import boom.v4.exu.{CommitExceptionSignals, BranchDecode, BrUpdateInfo, BranchDecodeSignals}
 import boom.v4.util._
+import boom.v4.lsu.SHFenceReq
 
 class GlobalHistory(implicit p: Parameters) extends BoomBundle()(p)
   with HasBoomFrontendParameters
@@ -262,6 +263,7 @@ class BoomFrontendIO(implicit p: Parameters) extends BoomBundle
   val scontext          = Output(UInt(coreParams.scontextWidth.W))
 
   val sfence = Valid(new SFenceReq)
+  val shfence = Valid(new SHFenceReq)
 
   val brupdate          = Output(new BrUpdateInfo)
 
@@ -969,7 +971,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   ftq.io.redirect.bits    := io.cpu.redirect_ftq_idx
   fb.io.clear := false.B
 
-  when (io.cpu.sfence.valid) {
+  when (io.cpu.sfence.valid || io.cpu.shfence.valid) {
     fb.io.clear := true.B
     f4_clear    := true.B
     f3_clear    := true.B

@@ -1102,6 +1102,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   io.lsu.sfence := unq_exe_unit.io_sfence.get
   io.ifu.sfence := unq_exe_unit.io_sfence.get
+  io.lsu.shfence := unq_exe_unit.io_shfence.get
+  io.ifu.shfence := unq_exe_unit.io_shfence.get
 
   // for critical path reasons, we aren't zero'ing this out if resp is not valid
   csr.io.rw.addr        := csr_resp.bits.addr
@@ -1366,6 +1368,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.ptw.pmp        := csr.io.pmp
   io.ptw.sfence     := io.ifu.sfence
   io.htw.sfence     := io.ifu.sfence
+  io.htw.shfence    := io.ifu.shfence
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

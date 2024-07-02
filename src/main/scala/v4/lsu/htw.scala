@@ -59,6 +59,7 @@ class HTWPerfEvents(implicit p: Parameters) extends BoomBundle()(p) {
 
 class DatapathHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
   val sfence = Flipped(Valid(new SFenceReq))
+  val shfence = Flipped(Valid(new SHFenceReq))
   val perf = Output(new HTWPerfEvents())
   val customCSRs = Flipped(coreParams.customCSRs)
   val clock_enabled = Output(Bool())
@@ -366,6 +367,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     io.dpath.perf.l2hit := l2_hit && !l2_error
     io.dpath.perf.l2miss := !l2_hit && !l2_error && mem_resp_valid
+
+    when (io.dpath.shfence.valid) {
+      printf("[HTW] Dumping HTLB Contents\n")
+    }
   }
 
   private def ccover(cond: Bool, label: String, desc: String)(implicit

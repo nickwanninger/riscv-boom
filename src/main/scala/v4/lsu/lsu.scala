@@ -162,6 +162,7 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
   })
 
   val htBase = Input(UInt(xLen.W))
+  val shfence = Flipped(Valid(new SHFenceReq))
 }
 
 class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
@@ -172,6 +173,8 @@ class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
   val htw   = new HTLBHTWIO
 
   val hellacache = Flipped(new freechips.rocketchip.rocket.HellaCacheIO)
+
+  val htlb_mem = new rocket.HellaCacheIO
 }
 
 class LDQEntry(implicit p: Parameters) extends BoomBundle()(p)
@@ -331,6 +334,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   val htlb = Module(new HTLB(rocket.TLBConfig(dcacheParams.nTLBSets, dcacheParams.nTLBWays)))
   io.htw <> htlb.io.htw
+  io.htlb_mem <> htlb.io.mem
 
   // TODO: condition this on privilege level when we get to linux and running things not in S
   val htlb_enabled = ENABLE_HTLB.B && io.core.htBase =/= 0.U
@@ -757,6 +761,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                                                        0.U)))))
 
   val exe_sfence = io.core.sfence
+  val exe_shfence = io.core.shfence
 
   val exe_size   = widthMap(w =>
                    Mux(will_fire_load_agen_exec(w) ||
@@ -795,6 +800,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_h_passthr(w)
     htlb.io.sfence                  := exe_sfence
+    htlb.io.shfence                 := exe_shfence
     when (htlb.io.req(w).valid && htlb.io.req(w).bits.haddr =/= 0.U && htlb_enabled && !htlb.io.req(w).bits.passthrough) {
       printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough)
     }
