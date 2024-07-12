@@ -50,6 +50,7 @@ import org.chipsalliance.cde.config.Parameters
 import freechips.rocketchip.rocket
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.util.Str
+import freechips.rocketchip.rocket.constants.MemoryOpConstants
 
 import boom.v4.common._
 import boom.v4.exu.{BrUpdateInfo, Exception, CommitSignals, MemGen, ExeUnitResp, Wakeup}
@@ -162,7 +163,7 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
   })
 
   val htBase = Input(UInt(xLen.W))
-  val shfence = Flipped(Valid(new SHFenceReq))
+  val htDump = Input(Bool())
 }
 
 class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
@@ -335,6 +336,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val htlb = Module(new HTLB(rocket.TLBConfig(dcacheParams.nTLBSets, dcacheParams.nTLBWays)))
   io.htw <> htlb.io.htw
   io.htlb_mem <> htlb.io.mem
+  htlb.io.htDump <> io.core.htDump
 
   // TODO: condition this on privilege level when we get to linux and running things not in S
   val htlb_enabled = ENABLE_HTLB.B && io.core.htBase =/= 0.U
@@ -761,7 +763,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                                                        0.U)))))
 
   val exe_sfence = io.core.sfence
-  val exe_shfence = io.core.shfence
 
   val exe_size   = widthMap(w =>
                    Mux(will_fire_load_agen_exec(w) ||
@@ -780,7 +781,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                    Mux(will_fire_hella_incoming(w)  , hella_req.cmd,
                    Mux(will_fire_sfence        (w)  , rocket.M_SFENCE,
                                                       0.U))))
-
   val exe_kill   = widthMap(w =>
                    Mux(will_fire_hella_incoming(w)  , io.hellacache.s1_kill,
                                                       false.B))
@@ -800,7 +800,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_h_passthr(w)
     htlb.io.sfence                  := exe_sfence
-    htlb.io.shfence                 := exe_shfence
     when (htlb.io.req(w).valid && htlb.io.req(w).bits.haddr =/= 0.U && htlb_enabled && !htlb.io.req(w).bits.passthrough) {
       printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough)
     }
@@ -905,10 +904,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr, "[lsu] paddrs should match.")
 
     // debug for printing paddr for small handle optimization
-    when (!exe_tlb_miss(w) && !exe_h_passthr(w)) {
-     printf("exe_tlb_paddr(%d): %x, htlb: %x: \n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr)
-    }
-    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w)
+    // when (!exe_tlb_miss(w) && !exe_h_passthr(w)) {
+    //  printf("exe_tlb_paddr(%d): %x, htlb: %x: \n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr)
+    // }
+    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w) && !exe_passthr(w)
     htlb.io.tlb(w).bits := exe_tlb_paddr(w)(paddrBits-1, 12)
 
     when (mem_xcpt_valids(w))

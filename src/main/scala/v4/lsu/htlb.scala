@@ -10,8 +10,7 @@ import freechips.rocketchip.rocket._
 
 import boom.v4.common._
 import freechips.rocketchip.tile.CoreBundle
-
-class SHFenceReq(implicit p: Parameters) extends BoomBundle()(p) {}
+import freechips.rocketchip.jtag.JtagState.State.width
 
 class HTLBReq(implicit p: Parameters) extends BoomBundle()(p) {
   val haddr = UInt(xLen.W)
@@ -37,8 +36,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val htw = new HTLBHTWIO
     val tlb = Flipped(Vec(lsuWidth, Valid(UInt(ppnBits.W))))
     val sfence = Input(Valid(new SFenceReq))
-    val shfence = Input(Valid(new SHFenceReq))
     val mem = new HellaCacheIO
+    val htDump = Input(Bool())
   })
 
   class HTLBEntryData() extends Bundle() {
@@ -105,7 +104,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry()))
 
   // State Machine
-  val s_ready :: s_request :: s_wait :: s_wait_invalidate :: Nil = Enum(4)
+  val s_ready :: s_request :: s_wait :: s_wait_invalidate :: s_ht_dump :: s_ht_dumped :: Nil = Enum(6)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   state := OptimizationBarrier(next_state)
@@ -203,9 +202,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
   }
 
-  val shfence = io.shfence.valid
-
-  // Finite State Machine Logic
   val sfence = io.sfence.valid
   for (w <- 0 until lsuWidth) {
     when(
@@ -248,10 +244,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   when(io.htw.resp.valid) {
     next_state := s_ready
-  }
-
-  when(shfence) {
-    printf("[HTLB] Dumping HTLB\n")
   }
 
   when(sfence) {
@@ -303,47 +295,49 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     entries.foreach(_.invalidate())
   }
 
-  for (w <- 0 until lsuWidth) {
-    for ((e, i) <- entries.zipWithIndex) {
-      when(e.valid) {
-        val entry = e.data.asTypeOf(new HTLBEntryData)
-        printf(
-          "[HTLB] Entry %d: %d,  %x, %x (%d), %d\n",
-          i.U,
-          e.valid,
-          e.tag,
-          entry.addr,
-          entry.phys,
-          entry.immovable
-        )
-      }
-    }
-  }
+  // for (w <- 0 until lsuWidth) {
+  //   for ((e, i) <- entries.zipWithIndex) {
+  //     when(e.valid) {
+  //       val entry = e.data.asTypeOf(new HTLBEntryData)
+  //       printf(
+  //         "[HTLB] Entry %d: %d,  %x, %x (%d), %d\n",
+  //         i.U,
+  //         e.valid,
+  //         e.tag,
+  //         entry.addr,
+  //         entry.phys,
+  //         entry.immovable
+  //       )
+  //     }
+  //   }
+  // }
 
   // FSM Logic - get .way from plru, access it, get .way again. Do it until counter === n_ways for hits, go to final state, this marks completion, send resp to commit somehow, and then this is the end of the instruction.
 
   
-  val s_shfence_ready :: s_shfence_wait :: Nil = Enum(2)
-  val shfence_state_reg = RegInit(s_shfence_ready)
+  when(io.htDump && state =/= s_ht_dumped) {
+    printf("[HTLB] Dumping L1\n")
+    next_state := s_ht_dump
+  }
 
   val dumped_htlb_entries = RegInit(0.U(log2Ceil(entries.size).W))
 
-  when (victim === victim_wait && shfence_state_reg === s_shfence_ready) {
-    shfence_state_reg := s_shfence_wait
-  }
-  
-  when (shfence_state_reg === s_shfence_wait && dumped_htlb_entries === entries.size.U) {
-    shfence_state_reg := s_shfence_ready
+  when (state === s_ht_dump && dumped_htlb_entries === (entries.size - 1).U) {
+    next_state := s_ht_dumped
     dumped_htlb_entries := 0.U
   }
+  
+  when (state === s_ht_dumped && !io.htDump) {
+    next_state := s_ready
+  }
 
-  when (dumped_htlb_entries < entries.size.U && shfence_state_reg === s_shfence_wait) {
+  when (dumped_htlb_entries < entries.size.U && state === s_ht_dump) {
     val way = plru.way
 
     when(entries(way).valid) {
       val entry = entries(way).data.asTypeOf(new HTLBEntryData)
       printf(
-        "[HTLB] Ordered Dumping Way: %d: %d,  %x, %x (%d), %d\n",
+        "[HTLB] L1Entry: %d: %d,  %x, %x (%d), %d\n",
         way,
         entries(way).valid,
         entries(way).tag,
@@ -361,7 +355,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   io.mem.req.valid := false.B
   io.mem.req.bits.phys := false.B
-  io.mem.req.bits.cmd := M_XRD
+  io.mem.req.bits.cmd := M_XWR
   io.mem.req.bits.size := log2Ceil(
     xLen / 8
   ).U // TODO: confirm this makes sense
@@ -380,5 +374,4 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   io.mem.s1_kill := false.B
   io.mem.s1_data := DontCare
   io.mem.s2_kill := false.B
-
 }

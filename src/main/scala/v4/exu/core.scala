@@ -44,6 +44,7 @@ import boom.v4.common._
 import boom.v4.ifu.{GlobalHistory, HasBoomFrontendParameters}
 import boom.v4.util._
 import boom.v4.lsu.{DatapathHTWIO}
+import freechips.rocketchip.util.DataToAugmentedData
 
 /**
  * Top level core object that connects the Frontend to the rest of the pipeline.
@@ -307,6 +308,16 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   (custom_csrs.csrs zip csr.io.customCSRs).map { case (lhs, rhs) => lhs <> rhs }
   io.ifu.enable_bpd := custom_csrs.enableBPD
   io.htw.customCSRs <> custom_csrs
+
+  when (io.htw.htDumped) {
+    printf("trying to end dumping ... %x\n", ~(io.htw.htDumped.asUInt))
+  } 
+
+  // TODO: fix possible consistency violation or worse if user tries to set csr while dump hasn't finished
+  csr.io.customCSRs(4).set := io.htw.htDumped
+  csr.io.customCSRs(4).sdata := 0.U
+  // TODO: fix this, it's either janky or perfectly correct
+  // csr.io.status.mie := Mux(csr.io.customCSRs(4).value.orR, io.htw.htDumped, csr.io.status.mie)
 
   //val icache_blocked = !(io.ifu.fetchpacket.valid || RegNext(io.ifu.fetchpacket.valid))
   val icache_blocked = false.B
@@ -1102,8 +1113,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   io.lsu.sfence := unq_exe_unit.io_sfence.get
   io.ifu.sfence := unq_exe_unit.io_sfence.get
-  io.lsu.shfence := unq_exe_unit.io_shfence.get
-  io.ifu.shfence := unq_exe_unit.io_shfence.get
 
   // for critical path reasons, we aren't zero'ing this out if resp is not valid
   csr.io.rw.addr        := csr_resp.bits.addr
@@ -1358,6 +1367,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
 
   io.lsu.htBase := custom_csrs.htBase
+  io.lsu.htDump := custom_csrs.htDump(31,0).andR
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------
@@ -1368,7 +1378,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.ptw.pmp        := csr.io.pmp
   io.ptw.sfence     := io.ifu.sfence
   io.htw.sfence     := io.ifu.sfence
-  io.htw.shfence    := io.ifu.shfence
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

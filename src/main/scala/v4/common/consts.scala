@@ -270,8 +270,6 @@ trait ScalarOpConstants
 
   val uopINVLHID    = 110.U(UOPC_SZ.W)
 
-  val uopSHFENCE    = 111.U(UOPC_SZ.W)
-
   val uopROCC      = 126.U(UOPC_SZ.W)
 
   val uopMOV       = 127.U(UOPC_SZ.W) // conditional mov decoded from "add rd, x0, rs2"

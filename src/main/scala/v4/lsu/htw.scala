@@ -13,6 +13,8 @@ import freechips.rocketchip.rocket.HellaCacheIO
 
 import boom.v4.common._
 import freechips.rocketchip.rocket.PRV.U
+import freechips.rocketchip.tilelink.TLMessages.c
+import Chisel.experimental.dump
 
 class HTE(implicit p: Parameters) extends BoomBundle()(p) {
   val small = Bool()
@@ -59,9 +61,9 @@ class HTWPerfEvents(implicit p: Parameters) extends BoomBundle()(p) {
 
 class DatapathHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
   val sfence = Flipped(Valid(new SFenceReq))
-  val shfence = Flipped(Valid(new SHFenceReq))
   val perf = Output(new HTWPerfEvents())
   val customCSRs = Flipped(coreParams.customCSRs)
+  val htDumped = Output(Bool())
   val clock_enabled = Output(Bool())
 }
 
@@ -75,7 +77,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
   })
 
   // State Machine
-  val s_ready :: s_req :: s_wait :: s_victim :: Nil = Enum(4)
+  val s_ready :: s_req :: s_wait :: s_victim :: s_dumping :: Nil = Enum(5)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   val l2_refill_wire = Wire(Bool())
@@ -104,36 +106,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val v_hid = Reg(UInt(handleBits.W))
 
     invalidated := io.dpath.sfence.valid || (invalidated && state =/= s_ready)
-
-    // HT Lookup
-    val hte_vaddr =
-      io.dpath.customCSRs.htBase + r_req.hid * ((new HTE().getWidth.U) / 8.U)
-
-    // Prepare Memory Request
-    io.mem.keep_clock_enabled := false.B
-
-    io.mem.req.valid := state === s_wait
-    io.mem.req.bits.phys := false.B
-    io.mem.req.bits.cmd := M_XRD
-    io.mem.req.bits.size := log2Ceil(
-      xLen / 8
-    ).U // TODO: confirm this makes sense
-    io.mem.req.bits.signed := false.B
-    io.mem.req.bits.addr := hte_vaddr
-    io.mem.req.bits.idx.foreach(_ := hte_vaddr) // TODO: huh?
-    io.mem.req.bits.dprv := PRV.S.U // HTW accesses are S-mode by definition
-    io.mem.req.bits.dv := false.B
-    io.mem.req.bits.tag := DontCare
-    io.mem.req.bits.no_resp := false.B
-    io.mem.req.bits.no_alloc := DontCare
-    io.mem.req.bits.no_xcpt := DontCare
-    io.mem.req.bits.data := DontCare
-    io.mem.req.bits.mask := DontCare
-
-    // TODO: This may need to change if we get an exception in the middle of a handle table walk
-    io.mem.s1_kill := false.B
-    io.mem.s1_data := DontCare
-    io.mem.s2_kill := false.B
 
     /* debug print for handle table walks */
     when(io.mem.req.valid) {
@@ -194,8 +166,11 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         }
       }
       is(s_victim) {
-        next_state := Mux(io.dpath.sfence.valid, s_ready, 
-                          Mux(invalidated, s_ready, s_victim))
+        next_state := Mux(
+          io.dpath.sfence.valid,
+          s_ready,
+          Mux(invalidated, s_ready, s_victim)
+        )
       }
     }
 
@@ -204,7 +179,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val pte = WireDefault(tmp)
     when(mem_resp_valid) {
       printf(
-        "[HTW] Found PTE - Frozen: %x, Reserved: %x, Addr: %x, Small: %d\n",
+        "[HTW] Found HTE - Frozen: %x, Reserved: %x, Addr: %x, Small: %d\n",
         pte.frozen,
         pte.reserved,
         pte.addr,
@@ -251,36 +226,45 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       /** the valid vec for the selected set(including n ways) */
       val r_valid_vec = valid.map(_(r_idx)).asUInt
       val r_valid_vec_q = Reg(UInt(coreParams.nL2TLBWays.W))
-      val r_l2_plru_way = Reg(UInt(log2Ceil(coreParams.nL2TLBWays max 1).W))
       r_valid_vec_q := r_valid_vec
-      // replacement way
-      r_l2_plru_way := (if (coreParams.nL2TLBWays > 1) l2_plru.way(r_idx)
-                        else 0.U)
       // refill with r_pte(leaf pte)
       when(l2_refill && !invalidated) {
+        val (v_tag, v_idx) = Split(v_hid, idxBits)
+
+        val v_valid_vec = valid.map(_(v_idx)).asUInt
+        val v_valid_vec_q = Reg(UInt(coreParams.nL2TLBWays.W))
+        
+        // replacement way
+        val v_l2_plru_way = Reg(UInt(log2Ceil(coreParams.nL2TLBWays max 1).W))
+        v_valid_vec_q := v_valid_vec
+        // replacement way
+        v_l2_plru_way := (if (coreParams.nL2TLBWays > 1) l2_plru.way(v_idx)
+                          else 0.U)
+
         val entry = Wire(new L2HTLBEntry(nL2TLBSets))
         entry.small := v_hte.small
         entry.frozen := v_hte.frozen
         entry.addr := v_hte.addr
-        entry.tag := v_hid
+        entry.tag := v_tag
         // if all the way are valid, use plru to select one way to be replaced,
         // otherwise use PriorityEncoderOH to select one
         val wmask =
           if (coreParams.nL2TLBWays > 1)
             Mux(
-              r_valid_vec_q.andR,
-              UIntToOH(r_l2_plru_way, coreParams.nL2TLBWays),
-              PriorityEncoderOH(~r_valid_vec_q)
+              v_valid_vec_q.andR,
+              UIntToOH(v_l2_plru_way, coreParams.nL2TLBWays),
+              PriorityEncoderOH(~v_valid_vec_q)
             )
           else 1.U(1.W)
         ram.write(
-          r_idx,
+          v_idx,
           VecInit(Seq.fill(coreParams.nL2TLBWays)(code.encode(entry.asUInt))),
           wmask.asBools
         )
-        printf("[HTW] Inserting with addr: %x\n", entry.addr)
+        printf("[HTW] Inserting with addr: %x into set %d, way %d (tag)\n", entry.addr, v_idx, v_tag)
 
-        val mask = UIntToOH(r_idx)
+        val mask = UIntToOH(v_idx)
+        printf("Mask: %x\n", mask)
         for (way <- 0 until coreParams.nL2TLBWays) {
           when(wmask(way)) {
             valid(way) := valid(way) | mask
@@ -321,9 +305,22 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       io.dpath.perf.l2miss := s2_valid && !(s2_hit_vec.orR)
       io.dpath.perf.l2hit := s2_hit
       when(s2_hit) {
-        l2_plru.access(r_idx, OHToUInt(s2_hit_vec))
+        // l2_plru.access(r_idx, OHToUInt(s2_hit_vec))
+        val invl_mask = UIntToOH(r_idx)
+        printf("Invl Mask: %x\n", invl_mask)
+        for (way <- 0 until coreParams.nL2TLBWays) {
+            valid(way) := valid(way) & ~invl_mask
+            //   g(way) := Mux(r_pte.g, g(way) | mask, g(way) & ~mask)
+        }
         assert((PopCount(s2_hit_vec) === 1.U) || s2_error, "L2 HTLB multi-hit")
       }
+
+      // for (i <- 0 until (nL2TLBSets - 1)) {
+        val testing_valid_vec = valid(0).asUInt
+        when (testing_valid_vec =/= 0.U) {
+          printf("Valid: %x\n", testing_valid_vec)
+        }
+      // }
 
       val s2_hte = Wire(new HTE)
       val s2_hit_entry = Mux1H(s2_hit_vec, s2_entry_vec)
@@ -342,6 +339,70 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
       when(s2_hit) {
         printf("[HTW] Hit with addr: %x\n", s2_hit_entry.addr)
+      }
+
+      when(io.dpath.customCSRs.htDump(31,0).andR) {
+        printf("[HTW] Dumping L2\n")
+        next_state := s_dumping
+      }
+
+      val dumped_ways = RegInit(0.U(log2Ceil(coreParams.nL2TLBWays).W))
+      val set = RegInit(0.U(idxBits.W))
+      io.dpath.htDumped := set === (nL2TLBSets - 1).U && state === s_dumping
+
+      val dr_valid_vec = ShiftRegister(valid.map(_(set)).asUInt, 2)
+      val ds0_valid = state === s_dumping
+      val ds1_valid = RegNext(ds0_valid)
+      val ds2_valid = RegNext(ds1_valid)
+      // read from tlb idx
+      val ds1_rdata = ram.read(set, ds0_valid)
+      val ds2_rdata =
+        ds1_rdata.map(ds1_rdway => code.decode(RegEnable(ds1_rdway, ds1_valid)))
+      val ds2_error = (0 until coreParams.nL2TLBWays)
+        .map(way => dr_valid_vec(way) && ds2_rdata(way).error)
+        .orR
+      when(ds2_valid && ds2_error) { valid.foreach { _ := 0.U } }
+      // decode
+      val ds2_entry_vec =
+        ds2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2TLBSets)))
+
+      val ds2_hit_vec = (0 until coreParams.nL2TLBWays).map(way =>
+        dr_valid_vec(way)
+      )
+
+      val ds2_hit = ds2_valid && ds2_hit_vec.orR
+
+      when (state === s_dumping && dumped_ways < coreParams.nL2TLBWays.U) {
+        val way = l2_plru.way(set)
+
+        val ds2_hte = Wire(new L2HTLBEntry(nL2TLBSets))
+        val ds2_hit_entry = Mux1H(UIntToOH(way), ds2_entry_vec)
+        ds2_hte.addr := ds2_hit_entry.addr
+        ds2_hte.tag := ds2_hit_entry.tag
+        ds2_hte.frozen := DontCare
+        ds2_hte.small := DontCare
+
+        when(ds2_hit) {
+          printf(
+            "[HTW] L2Entry (%d, %d): Valid(%d) %d - %x\n",
+            set - 2.U,
+            way,
+            dr_valid_vec(way),
+            Cat(ds2_hte.tag, set - 2.U),
+            ds2_hte.addr
+          )
+        }
+
+        printf("Set: %d, Way: %d\n", set, way)
+
+        l2_plru.access(set, way)
+      }
+
+      dumped_ways := Mux(state === s_dumping, dumped_ways + 1.U, Mux(dumped_ways === (coreParams.nL2TLBWays- 1).U, 0.U, dumped_ways))
+      set := Mux(state === s_dumping && dumped_ways === (coreParams.nL2TLBWays - 1).U, set + 1.U, Mux(set === (nL2TLBSets - 1).U, 0.U, set))
+
+      when (set === (nL2TLBSets - 1).U && state === s_dumping) {
+        next_state := s_ready
       }
 
       (s2_hit, s2_error, s2_hte, Some(ram))
@@ -368,9 +429,35 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.dpath.perf.l2hit := l2_hit && !l2_error
     io.dpath.perf.l2miss := !l2_hit && !l2_error && mem_resp_valid
 
-    when (io.dpath.shfence.valid) {
-      printf("[HTW] Dumping HTLB Contents\n")
-    }
+    // HT Lookup
+    val hte_vaddr =
+      io.dpath.customCSRs.htBase + r_req.hid * ((new HTE().getWidth.U) / 8.U)
+
+    // Prepare Memory Request
+    io.mem.keep_clock_enabled := false.B
+
+    io.mem.req.valid := state === s_wait
+    io.mem.req.bits.phys := false.B
+    io.mem.req.bits.cmd := Mux(state === s_dumping, M_XWR, M_XRD)
+    io.mem.req.bits.size := log2Ceil(
+      xLen / 8
+    ).U // TODO: confirm this makes sense
+    io.mem.req.bits.signed := false.B
+    io.mem.req.bits.addr := hte_vaddr
+    io.mem.req.bits.idx.foreach(_ := hte_vaddr) // TODO: huh?
+    io.mem.req.bits.dprv := PRV.S.U // HTW accesses are S-mode by definition
+    io.mem.req.bits.dv := false.B
+    io.mem.req.bits.tag := DontCare
+    io.mem.req.bits.no_resp := false.B
+    io.mem.req.bits.no_alloc := DontCare
+    io.mem.req.bits.no_xcpt := DontCare
+    io.mem.req.bits.data := DontCare
+    io.mem.req.bits.mask := DontCare
+
+    // TODO: This may need to change if we get an exception in the middle of a handle table walk
+    io.mem.s1_kill := l2_hit || state =/= s_wait
+    io.mem.s1_data := DontCare
+    io.mem.s2_kill := false.B
   }
 
   private def ccover(cond: Bool, label: String, desc: String)(implicit
