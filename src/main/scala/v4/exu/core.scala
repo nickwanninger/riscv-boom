@@ -317,7 +317,12 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   csr.io.customCSRs(4).set := io.htw.htDumped
   csr.io.customCSRs(4).sdata := 0.U
   // TODO: fix this, it's either janky or perfectly correct
-  // csr.io.status.mie := Mux(csr.io.customCSRs(4).value.orR, io.htw.htDumped, csr.io.status.mie)
+  csr.io.clear_mie := Mux(csr.io.customCSRs(4).value.orR, io.htw.htDumped.orR, csr.io.status.mie)
+  csr.io.clear_mie := false.B
+
+  // when (csr.io.customCSRs(4).value.orR) {
+  //   printf("MStatus - MIE: %x\n", csr.io.status.mie)
+  // }
 
   //val icache_blocked = !(io.ifu.fetchpacket.valid || RegNext(io.ifu.fetchpacket.valid))
   val icache_blocked = false.B
@@ -1367,7 +1372,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
 
   io.lsu.htBase := custom_csrs.htBase
-  io.lsu.htDump := custom_csrs.htDump(31,0).andR
+  io.lsu.htDump := custom_csrs.htDump
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

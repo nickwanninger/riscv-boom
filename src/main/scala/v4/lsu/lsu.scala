@@ -163,7 +163,7 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
   })
 
   val htBase = Input(UInt(xLen.W))
-  val htDump = Input(Bool())
+  val htDump = Input(UInt(xLen.W))
 }
 
 class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)

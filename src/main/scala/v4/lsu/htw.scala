@@ -52,11 +52,16 @@ class HTLBHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
   val resp = Flipped(Valid(new HTWResp))
   val evict = Decoupled(new EvictionReq)
   val evict_resp = Input(Bool())
+
+  val l1miss = Bool()
+  val l1hit = Bool()
 }
 
 class HTWPerfEvents(implicit p: Parameters) extends BoomBundle()(p) {
   val l2miss = Bool()
   val l2hit = Bool()
+  val l1miss = Bool()
+  val l1hit = Bool()
 }
 
 class DatapathHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
@@ -77,7 +82,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
   })
 
   // State Machine
-  val s_ready :: s_req :: s_wait :: s_victim :: s_dumping :: Nil = Enum(5)
+  val s_ready :: s_req :: s_wait :: s_victim :: s_dumping :: s_dumping_wait :: Nil = Enum(6)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   val l2_refill_wire = Wire(Bool())
@@ -108,7 +113,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     invalidated := io.dpath.sfence.valid || (invalidated && state =/= s_ready)
 
     /* debug print for handle table walks */
-    when(io.mem.req.valid) {
+    when(io.mem.req.valid && state === s_wait) {
       printf(
         "[HTW] -> [Mem] Looking up HID: %d at %x\n",
         r_req.hid,
@@ -195,14 +200,17 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     l2_refill := state === s_victim
     io.requestor.evict.ready := state === s_ready
 
-    val (l2_hit, l2_error, l2_hte, l2_htlb_ram) = {
+    val nL2TLBSets = coreParams.nL2TLBEntries / coreParams.nL2TLBWays
+    val idxBits = log2Ceil(nL2TLBSets)
+    val set = RegInit(0.U(idxBits.W))
+    val dumped_ways = RegInit(0.U(log2Ceil(coreParams.nL2TLBWays).W))
+
+    val (l2_hit, l2_error, l2_hte, l2_htlb_ram, d_hte) = {
       val code = new ParityCode
       require(isPow2(coreParams.nL2TLBEntries))
       require(isPow2(coreParams.nL2TLBWays))
       require(coreParams.nL2TLBEntries >= coreParams.nL2TLBWays)
-      val nL2TLBSets = coreParams.nL2TLBEntries / coreParams.nL2TLBWays
       require(isPow2(nL2TLBSets))
-      val idxBits = log2Ceil(nL2TLBSets)
 
       val l2_plru = new SetAssocLRU(nL2TLBSets, coreParams.nL2TLBWays, "plru")
 
@@ -341,16 +349,14 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         printf("[HTW] Hit with addr: %x\n", s2_hit_entry.addr)
       }
 
-      when(io.dpath.customCSRs.htDump(31,0).andR) {
+      when(io.dpath.customCSRs.htDump.orR) {
         printf("[HTW] Dumping L2\n")
         next_state := s_dumping
       }
 
-      val dumped_ways = RegInit(0.U(log2Ceil(coreParams.nL2TLBWays).W))
-      val set = RegInit(0.U(idxBits.W))
       io.dpath.htDumped := set === (nL2TLBSets - 1).U && state === s_dumping
 
-      val dr_valid_vec = ShiftRegister(valid.map(_(set)).asUInt, 2)
+      val dr_valid_vec = ShiftRegister(RegEnable(valid.map(_(set)).asUInt, (state === s_dumping_wait && mem_resp_valid) || state === s_dumping), 1)
       val ds0_valid = state === s_dumping
       val ds1_valid = RegNext(ds0_valid)
       val ds2_valid = RegNext(ds1_valid)
@@ -372,10 +378,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
       val ds2_hit = ds2_valid && ds2_hit_vec.orR
 
+      val ds2_hte = Wire(new L2HTLBEntry(nL2TLBSets))
       when (state === s_dumping && dumped_ways < coreParams.nL2TLBWays.U) {
         val way = l2_plru.way(set)
 
-        val ds2_hte = Wire(new L2HTLBEntry(nL2TLBSets))
         val ds2_hit_entry = Mux1H(UIntToOH(way), ds2_entry_vec)
         ds2_hte.addr := ds2_hit_entry.addr
         ds2_hte.tag := ds2_hit_entry.tag
@@ -384,28 +390,32 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
         when(ds2_hit) {
           printf(
-            "[HTW] L2Entry (%d, %d): Valid(%d) %d - %x\n",
+            "[HTW]  L2Entry: %d: %d, Valid(%d) %x - %x\n",
             set - 2.U,
             way,
             dr_valid_vec(way),
             Cat(ds2_hte.tag, set - 2.U),
             ds2_hte.addr
           )
+          next_state := s_dumping_wait
         }
 
-        printf("Set: %d, Way: %d\n", set, way)
+        printf("Set: %d, Way: %d - Valid(%d)\n", set, way, dr_valid_vec(way))
 
         l2_plru.access(set, way)
+      }.otherwise {
+        ds2_hte := DontCare
       }
 
       dumped_ways := Mux(state === s_dumping, dumped_ways + 1.U, Mux(dumped_ways === (coreParams.nL2TLBWays- 1).U, 0.U, dumped_ways))
-      set := Mux(state === s_dumping && dumped_ways === (coreParams.nL2TLBWays - 1).U, set + 1.U, Mux(set === (nL2TLBSets - 1).U, 0.U, set))
+
+      set := Mux(dumped_ways === (coreParams.nL2TLBWays - 1).U && (ShiftRegister(state === s_dumping_wait && mem_resp_valid, 1) || state === s_dumping), set + 1.U, Mux(set === (nL2TLBSets - 1).U, 0.U, set))
 
       when (set === (nL2TLBSets - 1).U && state === s_dumping) {
         next_state := s_ready
       }
 
-      (s2_hit, s2_error, s2_hte, Some(ram))
+      (s2_hit, s2_error, s2_hte, Some(ram), ds2_hte)
     }
     // printf("%d, %d, %d\n", l2_hit, l2_error, mem_resp_valid)
 
@@ -428,22 +438,35 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     io.dpath.perf.l2hit := l2_hit && !l2_error
     io.dpath.perf.l2miss := !l2_hit && !l2_error && mem_resp_valid
+    io.dpath.perf.l1hit := io.requestor.l1hit
+    io.dpath.perf.l1miss := io.requestor.l1hit
 
     // HT Lookup
     val hte_vaddr =
       io.dpath.customCSRs.htBase + r_req.hid * ((new HTE().getWidth.U) / 8.U)
 
+    val d_hte_vaddr = io.dpath.customCSRs.htDump + (dcacheParams.nTLBSets*dcacheParams.nTLBWays*8).U + dumped_ways*nL2TLBSets.U*8.U + (set - 2.U)*8.U
+
+    when (state === s_dumping_wait) {
+      printf("Dumping hid %x to (%x) + (%d) %x: %x\n", Cat(d_hte.tag, set - 2.U), io.dpath.customCSRs.htDump, (dcacheParams.nTLBSets*dcacheParams.nTLBWays*8).U + dumped_ways*nL2TLBSets.U*8.U + (set - 2.U)*8.U, d_hte_vaddr, Cat(d_hte.tag, set))
+    }
+
+    when (state === s_dumping_wait && mem_resp_valid) {
+      printf("Dumped %x\n", mem_resp_data)
+      next_state := s_dumping
+    }
+
     // Prepare Memory Request
     io.mem.keep_clock_enabled := false.B
 
-    io.mem.req.valid := state === s_wait
+    io.mem.req.valid := state === s_wait || state === s_dumping_wait
     io.mem.req.bits.phys := false.B
     io.mem.req.bits.cmd := Mux(state === s_dumping, M_XWR, M_XRD)
     io.mem.req.bits.size := log2Ceil(
       xLen / 8
     ).U // TODO: confirm this makes sense
     io.mem.req.bits.signed := false.B
-    io.mem.req.bits.addr := hte_vaddr
+    io.mem.req.bits.addr := Mux(state === s_wait, hte_vaddr, d_hte_vaddr)
     io.mem.req.bits.idx.foreach(_ := hte_vaddr) // TODO: huh?
     io.mem.req.bits.dprv := PRV.S.U // HTW accesses are S-mode by definition
     io.mem.req.bits.dv := false.B
@@ -451,11 +474,11 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.mem.req.bits.no_resp := false.B
     io.mem.req.bits.no_alloc := DontCare
     io.mem.req.bits.no_xcpt := DontCare
-    io.mem.req.bits.data := DontCare
+    io.mem.req.bits.data := Mux(state === s_wait, 0.U, Cat(d_hte.tag, set))
     io.mem.req.bits.mask := DontCare
 
     // TODO: This may need to change if we get an exception in the middle of a handle table walk
-    io.mem.s1_kill := l2_hit || state =/= s_wait
+    io.mem.s1_kill := l2_hit || (state =/= s_wait && state =/= s_dumping_wait)
     io.mem.s1_data := DontCare
     io.mem.s2_kill := false.B
   }

@@ -37,7 +37,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val tlb = Flipped(Vec(lsuWidth, Valid(UInt(ppnBits.W))))
     val sfence = Input(Valid(new SFenceReq))
     val mem = new HellaCacheIO
-    val htDump = Input(Bool())
+    val htDump = Input(UInt(xLen.W))
   })
 
   class HTLBEntryData() extends Bundle() {
@@ -315,7 +315,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   // FSM Logic - get .way from plru, access it, get .way again. Do it until counter === n_ways for hits, go to final state, this marks completion, send resp to commit somehow, and then this is the end of the instruction.
 
   
-  when(io.htDump && state =/= s_ht_dumped) {
+  when(io.htDump.orR && state =/= s_ht_dumped) {
     printf("[HTLB] Dumping L1\n")
     next_state := s_ht_dump
   }
@@ -327,7 +327,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     dumped_htlb_entries := 0.U
   }
   
-  when (state === s_ht_dumped && !io.htDump) {
+  when (state === s_ht_dumped && !io.htDump.orR) {
     next_state := s_ready
   }
 
@@ -350,6 +350,9 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
     dumped_htlb_entries := dumped_htlb_entries + 1.U
   }
+
+  io.htw.l1miss := do_refill || htlb_miss.orR
+  io.htw.l1hit := htlb_hit.orR && !(do_refill || htlb_miss.orR)
 
   io.mem.keep_clock_enabled := false.B
 
