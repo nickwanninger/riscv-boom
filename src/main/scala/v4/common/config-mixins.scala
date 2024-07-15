@@ -150,6 +150,55 @@ class WithNSmallBooms(n: Int = 1) extends Config(
   })
 )
 
+class WithNSmallHBooms(n: Int = 1) extends Config(
+  new WithTAGELBPD ++ // Default to TAGE-L BPD
+  new Config((site, here, up) => {
+    case TilesLocated(InSubsystem) => {
+      val prev = up(TilesLocated(InSubsystem), site)
+      val idOffset = up(NumTiles)
+      (0 until n).map { i =>
+        BoomTileAttachParams(
+          tileParams = BoomTileParams(
+            core = BoomCoreParams(
+              fetchWidth = 4,
+              decodeWidth = 1,
+              numRobEntries = 32,
+              issueParams = Seq(
+                IssueParams(issueWidth=2, numEntries=8, iqType=IQ_MEM, dispatchWidth=1),
+                IssueParams(issueWidth=1, numEntries=8, iqType=IQ_UNQ, dispatchWidth=1),
+                IssueParams(issueWidth=1, numEntries=8, iqType=IQ_ALU, dispatchWidth=1),
+                IssueParams(issueWidth=1, numEntries=8, iqType=IQ_FP , dispatchWidth=1)),
+              numIntPhysRegisters = 52,
+              numFpPhysRegisters = 48,
+              numIrfReadPorts = 3,
+              numFrfReadPorts = 3,
+              numFrfBanks = 1,
+              numLdqEntries = 8,
+              numStqEntries = 8,
+              maxBrCount = 8,
+              numFetchBufferEntries = 8,
+              ftq = FtqParameters(nEntries=16),
+              nPerfCounters = 2,
+              fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
+              // customIsaExt = Some("Handles")
+            ),
+            dcache = Some(
+              DCacheParams(rowBits = 64, nSets=64, nWays=4, nMSHRs=2, nTLBWays=8)
+            ),
+            icache = Some(
+              ICacheParams(rowBits = 64, nSets=64, nWays=4, fetchBytes=2*4)
+            ),
+            tileId = i + idOffset
+          ),
+          crossingParams = RocketCrossingParams()
+        )
+      } ++ prev
+    }
+    case XLen => 64
+    case NumTiles => up(NumTiles) + n
+  })
+)
+
 /**
  * 2-wide BOOM.
  */
@@ -254,6 +303,57 @@ class WithNLargeBooms(n: Int = 1) extends Config(
   })
 )
 // DOC include end: LargeBoomConfig
+
+class WithNLargeHBooms(n: Int = 1) extends Config(
+  new WithTAGELBPD ++ // Default to TAGE-L BPD
+  new Config((site, here, up) => {
+    case TilesLocated(InSubsystem) => {
+      val prev = up(TilesLocated(InSubsystem), site)
+      val idOffset = up(NumTiles)
+      (0 until n).map { i =>
+        BoomTileAttachParams(
+          tileParams = BoomTileParams(
+            core = BoomCoreParams(
+              fetchWidth = 8,
+              decodeWidth = 3,
+              numRobEntries = 96,
+              issueParams = Seq(
+                IssueParams(issueWidth=2, numEntries=16, iqType=IQ_MEM, dispatchWidth=3),
+                IssueParams(issueWidth=1, numEntries=16, iqType=IQ_UNQ, dispatchWidth=3, numSlowEntries=8),
+                IssueParams(issueWidth=3, numEntries=16, iqType=IQ_ALU, dispatchWidth=3, numSlowEntries=8),
+                IssueParams(issueWidth=1, numEntries=24, iqType=IQ_FP , dispatchWidth=3, numSlowEntries=12)),
+              numIntPhysRegisters = 100,
+              numFpPhysRegisters = 96,
+              numIrfReadPorts = 6,
+              numIrfBanks = 2,
+              numFrfReadPorts = 3,
+              numFrfBanks = 1,
+              numLdqEntries = 24,
+              numStqEntries = 24,
+              maxBrCount = 16,
+              numFetchBufferEntries = 24,
+              enableColumnALUIssue = true,
+              ftq = FtqParameters(nEntries=32),
+              fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
+              // customIsaExt = Some("Handles")
+            ),
+            dcache = Some(
+              DCacheParams(rowBits = 128, nSets=64, nWays=8, nMSHRs=4, nTLBWays=16)
+            ),
+            icache = Some(
+              ICacheParams(rowBits = 128, nSets=64, nWays=8, fetchBytes=4*4)
+            ),
+            tileId = i + idOffset
+          ),
+          crossingParams = RocketCrossingParams()
+        )
+      } ++ prev
+    }
+    case XLen => 64
+    case NumTiles => up(NumTiles) + n
+  })
+)
+
 
 class WithNMegaBooms(n: Int = 1) extends Config(
   new WithTAGELBPD ++ // Default to TAGE-L BPD

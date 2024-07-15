@@ -1033,7 +1033,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     }
 
     when (dmem_req(w).bits.is_hella) {
-      printf("HellaReq: %x %d\n", dmem_req(w).bits.addr, dmem_req(w).bits.uop.mem_size)
+      printf("HellaReq: %x %d - cmd:%d\n", dmem_req(w).bits.addr, dmem_req(w).bits.uop.mem_size, dmem_req(w).bits.uop.mem_cmd)
     }
 
     //-------------------------------------------------------------

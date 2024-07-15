@@ -142,6 +142,7 @@ case class BoomCoreParams(
   val useConditionalZero = false
 
   override def customCSRs(implicit p: Parameters) = new BoomCustomCSRs
+  override def customIsaExt = if (enableHandleSupport) Some("handle") else None
 }
 
 class BoomTraceBundle extends Bundle {

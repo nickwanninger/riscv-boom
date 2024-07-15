@@ -11,6 +11,8 @@ import freechips.rocketchip.rocket._
 import boom.v4.common._
 import freechips.rocketchip.tile.CoreBundle
 import freechips.rocketchip.jtag.JtagState.State.width
+import freechips.rocketchip.tilelink.TLMessages.d
+import Chisel.experimental.dump
 
 class HTLBReq(implicit p: Parameters) extends BoomBundle()(p) {
   val haddr = UInt(xLen.W)
@@ -104,7 +106,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry()))
 
   // State Machine
-  val s_ready :: s_request :: s_wait :: s_wait_invalidate :: s_ht_dump :: s_ht_dumped :: Nil = Enum(6)
+  val s_ready :: s_request :: s_wait :: s_wait_invalidate :: s_ht_dump :: s_ht_dump_wait :: s_ht_dumped :: Nil = Enum(7)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   state := OptimizationBarrier(next_state)
@@ -314,24 +316,39 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   // FSM Logic - get .way from plru, access it, get .way again. Do it until counter === n_ways for hits, go to final state, this marks completion, send resp to commit somehow, and then this is the end of the instruction.
 
+  // Handle HTW Responses
+  val mem_resp_valid = RegNext(io.mem.resp.valid)
+  val mem_resp_data = RegNext(io.mem.resp.bits.data)
+  io.mem.uncached_resp.map { resp =>
+    assert(!(resp.valid && io.mem.resp.valid))
+    resp.ready := true.B
+    when(resp.valid) {
+      mem_resp_valid := true.B
+      mem_resp_data := resp.bits.data
+    }
+  }
   
-  when(io.htDump.orR && state =/= s_ht_dumped) {
+  when(io.htDump.orR && state =/= s_ht_dumped && state =/= s_ht_dump && state =/= s_ht_dump_wait) {
     printf("[HTLB] Dumping L1\n")
     next_state := s_ht_dump
   }
 
-  val dumped_htlb_entries = RegInit(0.U(log2Ceil(entries.size).W))
+  val entry_idx = RegInit(0.U(log2Ceil(entries.size).W))
+  val dumped_entry_idx = RegInit(0.U(log2Ceil(entries.size).W))
+  val dumping = RegInit(false.B)
 
-  when (state === s_ht_dump && dumped_htlb_entries === (entries.size - 1).U) {
+  when (state === s_ht_dump && entry_idx === entries.size.U) {
     next_state := s_ht_dumped
-    dumped_htlb_entries := 0.U
+    entry_idx := 0.U
+    dumped_entry_idx := 0.U
   }
   
   when (state === s_ht_dumped && !io.htDump.orR) {
     next_state := s_ready
   }
 
-  when (dumped_htlb_entries < entries.size.U && state === s_ht_dump) {
+  val d_hid = RegInit(0.U(log2Ceil(entries.size).W))
+  when (entry_idx < entries.size.U && state === s_ht_dump) {
     val way = plru.way
 
     when(entries(way).valid) {
@@ -345,10 +362,15 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         entry.phys,
         entry.immovable
       )
+      d_hid := entries(way).tag
+      next_state := s_ht_dump_wait
+      dumping := true.B
+    } .otherwise {
+      dumping := false.B
     }
     plru.access(way)
 
-    dumped_htlb_entries := dumped_htlb_entries + 1.U
+    entry_idx := Mux(state === s_ht_dump, entry_idx + 1.U, Mux(state === s_ht_dump_wait && mem_resp_valid, d_hid + 1.U, entry_idx));
   }
 
   io.htw.l1miss := do_refill || htlb_miss.orR
@@ -356,23 +378,35 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   io.mem.keep_clock_enabled := false.B
 
-  io.mem.req.valid := false.B
+  val d_hte_vaddr = WireDefault(io.htDump + dumped_entry_idx*8.U)
+
+  when (state === s_ht_dump_wait) {
+    printf("[HTLB] Dumping L1 Entry %d to %x\n", d_hid, d_hte_vaddr)
+  }
+
+  when (state === s_ht_dump_wait && mem_resp_valid) {
+    printf("[HTLB] Dumped L1 Entry %d\n", entry_idx)
+    dumped_entry_idx := dumped_entry_idx + 1.U
+    next_state := s_ht_dump
+  }
+
+  io.mem.req.valid := state === s_ht_dump_wait
   io.mem.req.bits.phys := false.B
   io.mem.req.bits.cmd := M_XWR
-  io.mem.req.bits.size := log2Ceil(
+  io.mem.req.bits.size := 6.U /*log2Ceil(
     xLen / 8
-  ).U // TODO: confirm this makes sense
+  ).U */// TODO: confirm this makes sense
   io.mem.req.bits.signed := false.B
-  io.mem.req.bits.addr := 0.U
-  io.mem.req.bits.idx.foreach(_ := 1.U) // TODO: huh?
+  io.mem.req.bits.addr := d_hte_vaddr
+  io.mem.req.bits.idx.foreach(_ := d_hte_vaddr) // TODO: huh?
   io.mem.req.bits.dprv := PRV.S.U // HTW accesses are S-mode by definition
   io.mem.req.bits.dv := false.B
   io.mem.req.bits.tag := DontCare
   io.mem.req.bits.no_resp := false.B
   io.mem.req.bits.no_alloc := DontCare
   io.mem.req.bits.no_xcpt := DontCare
-  io.mem.req.bits.data := DontCare
-  io.mem.req.bits.mask := DontCare
+  io.mem.req.bits.data := d_hid
+  io.mem.req.bits.mask := ((1 << coreDataBytes) - 1).U
 
   io.mem.s1_kill := false.B
   io.mem.s1_data := DontCare
