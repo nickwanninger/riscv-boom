@@ -317,8 +317,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   csr.io.customCSRs(4).set := io.htw.htDumped
   csr.io.customCSRs(4).sdata := 0.U
   // TODO: fix this, it's either janky or perfectly correct
-  csr.io.clear_mie := Mux(csr.io.customCSRs(4).value.orR, io.htw.htDumped.orR, csr.io.status.mie)
-  csr.io.clear_mie := false.B
+  csr.io.clear_mie := Mux(csr.io.customCSRs(4).value.orR, io.htw.htDumped.orR, false.B)
+  // csr.io.clear_mie := false.B
 
   // when (csr.io.customCSRs(4).value.orR) {
   //   printf("MStatus - MIE: %x\n", csr.io.status.mie)

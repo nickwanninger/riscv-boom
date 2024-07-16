@@ -274,7 +274,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         printf("[HTW] Inserting with addr: %x into set %d, way %d (tag)\n", entry.addr, v_idx, v_tag)
 
         val mask = UIntToOH(v_idx)
-        printf("Mask: %x\n", mask)
+        // printf("Mask: %x\n", mask)
         for (way <- 0 until coreParams.nL2TLBWays) {
           when(wmask(way)) {
             valid(way) := valid(way) | mask
@@ -317,7 +317,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       when(s2_hit) {
         // l2_plru.access(r_idx, OHToUInt(s2_hit_vec))
         val invl_mask = UIntToOH(r_idx)
-        printf("Invl Mask: %x\n", invl_mask)
+        // printf("Invl Mask: %x\n", invl_mask)
         for (way <- 0 until coreParams.nL2TLBWays) {
             valid(way) := valid(way) & ~invl_mask
             //   g(way) := Mux(r_pte.g, g(way) | mask, g(way) & ~mask)
@@ -326,10 +326,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
 
       // for (i <- 0 until (nL2TLBSets - 1)) {
-        val testing_valid_vec = valid(0).asUInt
-        when (testing_valid_vec =/= 0.U) {
-          printf("Valid: %x\n", testing_valid_vec)
-        }
+      //   val testing_valid_vec = valid(0).asUInt
+      //   when (testing_valid_vec =/= 0.U) {
+      //     printf("Valid: %x\n", testing_valid_vec)
+      //   }
       // }
 
       val s2_hte = Wire(new HTE)
@@ -351,16 +351,19 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         printf("[HTW] Hit with addr: %x\n", s2_hit_entry.addr)
       }
 
+      val set_idx = RegInit(0.U((idxBits + 1).W))
+      val way_idx = RegInit(0.U((log2Ceil(coreParams.nL2TLBWays) + 1).W))
+      io.dpath.htDumped := set_idx === nL2TLBSets.U && state === s_dumping
+
       when(io.dpath.customCSRs.htDump.orR && (state =/= s_dumping && state =/= s_dumping_wait)) {
-        printf("[HTW] Dumping L2\n")
+        printf("[HTW] Starting to dump L2\n")
         next_state := s_dumping
+        dumped_htlb_idx := 0.U
+        set_idx := 0.U
+        way_idx := 0.U
       }
 
-      val set_idx = RegInit(0.U(idxBits.W))
-      val way_idx = RegInit(0.U(log2Ceil(coreParams.nL2TLBWays).W))
-      io.dpath.htDumped := set_idx === (nL2TLBSets - 1).U && state === s_dumping
-
-      val dr_valid_vec = ShiftRegister(valid.map(_(set_idx)).asUInt, 2)
+      val dr_valid_vec = ShiftRegister(valid.map(_(set_idx)).asUInt, 1)
       val ds0_valid = state === s_dumping
       val ds1_valid = RegNext(ds0_valid)
       val ds2_valid = RegNext(ds1_valid)
@@ -383,7 +386,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val ds2_hit = ds2_valid && ds2_hit_vec.orR
 
       val ds2_hte = Wire(new L2HTLBEntry(nL2TLBSets))
-      when (state === s_dumping && way_idx < coreParams.nL2TLBWays.U) {
+      when (state === s_dumping && way_idx < coreParams.nL2TLBWays.U && set_idx < nL2TLBSets.U) {
         val way = l2_plru.way(set_idx)
 
         val ds2_hit_entry = Mux1H(UIntToOH(way), ds2_entry_vec)
@@ -393,13 +396,13 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         ds2_hte.small := DontCare
 
         when(ds2_hit) {
-          d_set := set_idx - 2.U
+          d_set := set_idx - 1.U
           printf(
             "[HTW]  L2Entry: %d: %d, Valid(%d) %x - %x\n",
-            set_idx - 2.U,
+            set_idx - 1.U,
             way,
             dr_valid_vec(way),
-            Cat(ds2_hte.tag, set_idx - 2.U),
+            Cat(ds2_hte.tag, set_idx - 1.U),
             ds2_hte.addr
           )
           next_state := s_dumping_wait
@@ -413,16 +416,17 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
 
       // FIXME: this doesn't work for ways > 1
-      way_idx := Mux(state === s_dumping, way_idx + 1.U, Mux(way_idx === (coreParams.nL2TLBWays- 1).U, 0.U, way_idx))
+      way_idx := Mux((state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid), way_idx + 1.U, way_idx)
 
-      set_idx := Mux(way_idx === (coreParams.nL2TLBWays - 1).U && ((state === s_dumping && !ds2_hit)), set_idx + 1.U, Mux(state === s_dumping_wait && mem_resp_valid, d_set + 1.U, Mux(set_idx === (nL2TLBSets - 1).U, 0.U, set_idx)))
+      when (way_idx === coreParams.nL2TLBWays.U && ((state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid))) {
+        way_idx := 0.U
+      }
+
+      set_idx := Mux(way_idx === coreParams.nL2TLBWays.U && ((state === s_dumping && !ds2_hit)), set_idx + 1.U, Mux(state === s_dumping_wait && mem_resp_valid, d_set + 1.U, set_idx))
 
       // TODO: double check this exit condition?
-      when (set_idx === (nL2TLBSets - 1).U && (state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid)) {
-        dumped_htlb_idx := 0.U
+      when (set_idx === nL2TLBSets.U && (state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid)) {
         next_state := s_ready
-        set_idx := 0.U
-        way_idx := 0.U
       }
 
       (s2_hit, s2_error, s2_hte, Some(ram), ds2_hte)
@@ -458,11 +462,11 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val d_hte_vaddr = io.dpath.customCSRs.htDump + (dcacheParams.nTLBSets*dcacheParams.nTLBWays*8).U + dumped_htlb_idx*8.U
 
     when (state === s_dumping_wait) {
-      printf("Dumping hid %x to (%x) + (%x) = %x - Mask(%x)\n", Cat(d_hte.tag, d_set), io.dpath.customCSRs.htDump, dumped_htlb_idx*8.U, d_hte_vaddr, io.mem.req.bits.mask)
+      printf("[HTW] Dumping hid %x to %x\n", Cat(d_hte.tag, d_set), d_hte_vaddr)
     }
 
     when (state === s_dumping_wait && mem_resp_valid) {
-      printf("Dumped hid %x\n", Cat(d_hte.tag, d_set))
+      printf("[HTW] Finished dumping hid %x\n", Cat(d_hte.tag, d_set))
       dumped_htlb_idx := dumped_htlb_idx + 1.U
       next_state := s_dumping
     }
@@ -470,28 +474,28 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     // Prepare Memory Request
     io.mem.keep_clock_enabled := false.B
 
-    io.mem.req.valid := state === s_wait || state === s_dumping_wait
+    io.mem.req.valid := state === s_wait // || state === s_dumping_wait
     io.mem.req.bits.phys := false.B
-    io.mem.req.bits.cmd := Mux(state === s_dumping_wait, M_XWR, M_XRD)
-    io.mem.req.bits.size := 6.U /*
+    io.mem.req.bits.cmd := M_XRD // Mux(state === s_dumping_wait, M_XWR, M_XRD)
+    io.mem.req.bits.size :=
     log2Ceil(
       xLen / 8
-    ).U*/ // TODO: confirm this makes sense
+    ).U // TODO: confirm this makes sense
     io.mem.req.bits.signed := false.B
-    io.mem.req.bits.addr := Mux(state === s_wait, hte_vaddr, d_hte_vaddr)
-    io.mem.req.bits.idx.foreach(_ := Mux(state === s_wait, hte_vaddr, d_hte_vaddr)) // TODO: huh?
+    io.mem.req.bits.addr := hte_vaddr // Mux(state === s_wait, hte_vaddr, d_hte_vaddr)
+    io.mem.req.bits.idx.foreach(_ := hte_vaddr) // Mux(state === s_wait, hte_vaddr, d_hte_vaddr)) // TODO: huh?
     io.mem.req.bits.dprv := PRV.S.U // HTW accesses are S-mode by definition
     io.mem.req.bits.dv := false.B
     io.mem.req.bits.tag := DontCare
     io.mem.req.bits.no_resp := false.B
     io.mem.req.bits.no_alloc := DontCare
     io.mem.req.bits.no_xcpt := DontCare
-    io.mem.req.bits.data := Mux(state === s_wait, 0.U, Cat(d_hte.tag, d_set))
-    io.mem.req.bits.mask := ((1 << coreDataBytes) - 1).U
+    io.mem.req.bits.data := DontCare // Mux(state === s_wait, 0.U, Cat(d_hte.tag, d_set))
+    io.mem.req.bits.mask := DontCare // Mux(state =/= s_wait, ((1 << coreDataBytes) - 1).U, DontCare)
 
 
     // TODO: This may need to change if we get an exception in the middle of a handle table walk
-    io.mem.s1_kill := l2_hit || (state =/= s_wait && state =/= s_dumping_wait)
+    io.mem.s1_kill := l2_hit || (state =/= s_wait) // && state =/= s_dumping_wait)
     io.mem.s1_data := DontCare
     io.mem.s2_kill := false.B
 

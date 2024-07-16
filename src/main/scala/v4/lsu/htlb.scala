@@ -327,31 +327,34 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       mem_resp_data := resp.bits.data
     }
   }
+
+  val entry_idx = RegInit(0.U((log2Ceil(entries.size) + 1).W))
+  val dumped_entry_idx = RegInit(0.U((log2Ceil(entries.size) + 1).W))
   
   when(io.htDump.orR && state =/= s_ht_dumped && state =/= s_ht_dump && state =/= s_ht_dump_wait) {
-    printf("[HTLB] Dumping L1\n")
+    printf("[HTLB] Starting to dump L1\n")
+    entry_idx := 0.U
+    dumped_entry_idx := 0.U
     next_state := s_ht_dump
   }
 
-  val entry_idx = RegInit(0.U(log2Ceil(entries.size).W))
-  val dumped_entry_idx = RegInit(0.U(log2Ceil(entries.size).W))
-  val dumping = RegInit(false.B)
-
   when (state === s_ht_dump && entry_idx === entries.size.U) {
+    printf("[HTLB] Done dumping!!!\n")
     next_state := s_ht_dumped
-    entry_idx := 0.U
-    dumped_entry_idx := 0.U
   }
   
   when (state === s_ht_dumped && !io.htDump.orR) {
     next_state := s_ready
   }
 
-  val d_hid = RegInit(0.U(log2Ceil(entries.size).W))
+  val d_hid = RegInit(0.U(handleBits.W))
+  val hit = WireDefault(false.B)
   when (entry_idx < entries.size.U && state === s_ht_dump) {
     val way = plru.way
+    // printf("Entry idx: %d\n", entry_idx)
 
-    when(entries(way).valid) {
+    hit := entries(way).valid
+    when(hit) {
       val entry = entries(way).data.asTypeOf(new HTLBEntryData)
       printf(
         "[HTLB] L1Entry: %d: %d,  %x, %x (%d), %d\n",
@@ -364,38 +367,35 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       )
       d_hid := entries(way).tag
       next_state := s_ht_dump_wait
-      dumping := true.B
-    } .otherwise {
-      dumping := false.B
     }
     plru.access(way)
-
-    entry_idx := Mux(state === s_ht_dump, entry_idx + 1.U, Mux(state === s_ht_dump_wait && mem_resp_valid, d_hid + 1.U, entry_idx));
   }
+
+  entry_idx := Mux((state === s_ht_dump && !hit) || (state === s_ht_dump_wait && mem_resp_valid), entry_idx + 1.U, entry_idx);
 
   io.htw.l1miss := do_refill || htlb_miss.orR
   io.htw.l1hit := htlb_hit.orR && !(do_refill || htlb_miss.orR)
 
   io.mem.keep_clock_enabled := false.B
 
-  val d_hte_vaddr = WireDefault(io.htDump + dumped_entry_idx*8.U)
+  val d_hte_vaddr = io.htDump + dumped_entry_idx*8.U
 
   when (state === s_ht_dump_wait) {
     printf("[HTLB] Dumping L1 Entry %d to %x\n", d_hid, d_hte_vaddr)
   }
 
   when (state === s_ht_dump_wait && mem_resp_valid) {
-    printf("[HTLB] Dumped L1 Entry %d\n", entry_idx)
+    printf("[HTLB] Dumped %d-th L1 Entry %d\n", dumped_entry_idx, d_hid)
     dumped_entry_idx := dumped_entry_idx + 1.U
     next_state := s_ht_dump
   }
 
-  io.mem.req.valid := state === s_ht_dump_wait
+  io.mem.req.valid := state === s_ht_dump_wait && !mem_resp_valid
   io.mem.req.bits.phys := false.B
   io.mem.req.bits.cmd := M_XWR
-  io.mem.req.bits.size := 6.U /*log2Ceil(
+  io.mem.req.bits.size := log2Ceil(
     xLen / 8
-  ).U */// TODO: confirm this makes sense
+  ).U // TODO: confirm this makes sense
   io.mem.req.bits.signed := false.B
   io.mem.req.bits.addr := d_hte_vaddr
   io.mem.req.bits.idx.foreach(_ := d_hte_vaddr) // TODO: huh?
@@ -408,7 +408,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   io.mem.req.bits.data := d_hid
   io.mem.req.bits.mask := ((1 << coreDataBytes) - 1).U
 
-  io.mem.s1_kill := false.B
-  io.mem.s1_data := DontCare
+  io.mem.s1_kill := state =/= s_ht_dump_wait
+  io.mem.s1_data.data := d_hid
+  io.mem.s1_data.mask := ((1 << coreDataBytes) - 1).U
   io.mem.s2_kill := false.B
 }

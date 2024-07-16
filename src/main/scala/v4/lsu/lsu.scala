@@ -454,7 +454,14 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   ldq_tail := ld_enq_idx
   stq_tail := st_enq_idx
-
+  when (!(io.core.brupdate.b2.mispredict ||
+          stq_valid(stq_execute_head) ||
+          dis_stq_oh(stq_execute_head) ||
+          stq_head === stq_execute_head ||
+          stq_tail === stq_execute_head)) {
+    printf("mispredict: %d, stq_valid(stq_execute_head): %d, dis_stq_oh(stq_execute_head): %d, stq_head: %d, stq_execute_head: %d, stq_tail: %d\n",
+    io.core.brupdate.b2.mispredict, stq_valid(stq_execute_head), dis_stq_oh(stq_execute_head), stq_head, stq_execute_head, stq_tail)
+  }
   // If we got a mispredict, the tail will be misaligned for 1 extra cycle
   assert (io.core.brupdate.b2.mispredict ||
           stq_valid(stq_execute_head) ||
@@ -1916,6 +1923,14 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     hella_state := h_ready
   } .elsewhen (hella_state === h_s2) {
     io.hellacache.s2_xcpt := hella_xcpt
+     // Inline printing of all exceptions
+    when (hella_xcpt.ma.ld) { printf(p"ma_ld = 1\n") }
+    when (hella_xcpt.ma.st) { printf(p"ma_st = 1\n") }
+    when (hella_xcpt.pf.st) { printf(p"pf_st = 1\n") }
+    when (hella_xcpt.gf.ld) { printf(p"gf_ld = 1\n") }
+    when (hella_xcpt.gf.st) { printf(p"gf_st = 1\n") }
+    when (hella_xcpt.ae.ld) { printf(p"ae_ld = 1\n") }
+    when (hella_xcpt.ae.st) { printf(p"ae_st = 1\n") }
     when (io.hellacache.s2_kill || hella_xcpt.asUInt =/= 0.U) {
       hella_state := h_dead
     } .otherwise {
@@ -1947,6 +1962,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         io.hellacache.resp.bits.data   := io.dmem.resp(w).bits.data
       }
       when (io.dmem.nack(w).valid && io.dmem.nack(w).bits.is_hella) {
+        printf("nacked?\n")
         hella_state := h_replay
       }
     }
