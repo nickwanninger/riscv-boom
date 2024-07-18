@@ -12,7 +12,6 @@ import boom.v4.common._
 import freechips.rocketchip.tile.CoreBundle
 import freechips.rocketchip.jtag.JtagState.State.width
 import freechips.rocketchip.tilelink.TLMessages.d
-import Chisel.experimental.dump
 
 class HTLBReq(implicit p: Parameters) extends BoomBundle()(p) {
   val haddr = UInt(xLen.W)

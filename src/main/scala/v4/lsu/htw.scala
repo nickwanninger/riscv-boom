@@ -14,8 +14,6 @@ import freechips.rocketchip.rocket.HellaCacheIO
 import boom.v4.common._
 import freechips.rocketchip.rocket.PRV.U
 import freechips.rocketchip.tilelink.TLMessages.c
-import Chisel.experimental.dump
-import os.group.set
 
 class HTE(implicit p: Parameters) extends BoomBundle()(p) {
   val small = Bool()
