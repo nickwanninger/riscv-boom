@@ -423,7 +423,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       set_idx := Mux(way_idx === coreParams.nL2TLBWays.U && ((state === s_dumping && !ds2_hit)), set_idx + 1.U, Mux(state === s_dumping_wait && mem_resp_valid, d_set + 1.U, set_idx))
 
       // TODO: double check this exit condition?
-      when (set_idx === nL2TLBSets.U && (state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid)) {
+      when (set_idx === nL2TLBSets.U && state === s_dumping) {
         next_state := s_ready
       }
 
@@ -472,34 +472,34 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     // Prepare Memory Request
     io.mem.keep_clock_enabled := false.B
 
-    io.mem.req.valid := state === s_wait // || state === s_dumping_wait
+    io.mem.req.valid := state === s_wait || state === s_dumping_wait
     io.mem.req.bits.phys := false.B
-    io.mem.req.bits.cmd := M_XRD // Mux(state === s_dumping_wait, M_XWR, M_XRD)
+    io.mem.req.bits.cmd := Mux(state === s_wait, M_XRD, M_XWR)
     io.mem.req.bits.size :=
     log2Ceil(
       xLen / 8
     ).U // TODO: confirm this makes sense
     io.mem.req.bits.signed := false.B
-    io.mem.req.bits.addr := hte_vaddr // Mux(state === s_wait, hte_vaddr, d_hte_vaddr)
-    io.mem.req.bits.idx.foreach(_ := hte_vaddr) // Mux(state === s_wait, hte_vaddr, d_hte_vaddr)) // TODO: huh?
+    io.mem.req.bits.addr := Mux(state === s_wait, hte_vaddr, d_hte_vaddr)
+    io.mem.req.bits.idx.foreach(_ := Mux(state === s_wait, hte_vaddr, d_hte_vaddr)) // TODO: huh?
     io.mem.req.bits.dprv := PRV.S.U // HTW accesses are S-mode by definition
     io.mem.req.bits.dv := false.B
     io.mem.req.bits.tag := DontCare
     io.mem.req.bits.no_resp := false.B
     io.mem.req.bits.no_alloc := DontCare
     io.mem.req.bits.no_xcpt := DontCare
-    io.mem.req.bits.data := DontCare // Mux(state === s_wait, 0.U, Cat(d_hte.tag, d_set))
-    io.mem.req.bits.mask := DontCare // Mux(state =/= s_wait, ((1 << coreDataBytes) - 1).U, DontCare)
+    io.mem.req.bits.data := Mux(state === s_wait, DontCare, Cat(d_hte.tag, d_set))
+    io.mem.req.bits.mask := Mux(state === s_wait, DontCare, ((1 << coreDataBytes) - 1).U)
 
 
     // TODO: This may need to change if we get an exception in the middle of a handle table walk
-    io.mem.s1_kill := l2_hit || (state =/= s_wait) // && state =/= s_dumping_wait)
+    io.mem.s1_kill := l2_hit || (state =/= s_wait && state =/= s_dumping_wait)
     io.mem.s1_data := DontCare
     io.mem.s2_kill := false.B
 
-    // when (io.mem.s1_kill) {
-    //   printf("acccidentally killed? - %d, %d\n", l2_hit, state)
-    // }
+    when (io.mem.s1_kill) {
+      printf("acccidentally killed? - %d, %d\n", l2_hit, state)
+    }
   }
 
   private def ccover(cond: Bool, label: String, desc: String)(implicit
