@@ -120,7 +120,7 @@ case class BoomCoreParams(
   enableBranchPrintf: Boolean = false,
   enableMemtracePrintf: Boolean = false,
 
-  enableHandleSupport: Boolean = false
+  enableHandleSupport: Int = 0
 
 // DOC include end: BOOM Parameters
 ) extends freechips.rocketchip.tile.CoreParams
@@ -142,7 +142,7 @@ case class BoomCoreParams(
   val useConditionalZero = false
 
   override def customCSRs(implicit p: Parameters) = new BoomCustomCSRs
-  override def customIsaExt = if (enableHandleSupport) Some("handle") else None
+  override def customIsaExt = if (enableHandleSupport > 0) Some("handle") else None
 }
 
 class BoomTraceBundle extends Bundle {

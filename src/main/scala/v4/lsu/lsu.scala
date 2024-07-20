@@ -333,13 +333,13 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.perf.acquire := io.dmem.perf.acquire
   io.core.perf.release := io.dmem.perf.release
 
-  val htlb = Module(new HTLB(rocket.TLBConfig(dcacheParams.nTLBSets, dcacheParams.nTLBWays)))
+  val htlb = Module(new HTLB(rocket.TLBConfig(1, dcacheParams.nTLBWays*dcacheParams.nTLBSets)))
   io.htw <> htlb.io.htw
   io.htlb_mem <> htlb.io.mem
   htlb.io.htDump <> io.core.htDump
 
   // TODO: condition this on privilege level when we get to linux and running things not in S
-  val htlb_enabled = ENABLE_HTLB.B && io.core.htBase =/= 0.U
+  val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase =/= 0.U && io.core.status.prv <= (ENABLE_HTLB - 1).U
 
   val clear_store     = WireInit(false.B)
 

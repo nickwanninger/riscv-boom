@@ -202,10 +202,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val nL2TLBSets = coreParams.nL2TLBEntries / coreParams.nL2TLBWays
     val idxBits = log2Ceil(nL2TLBSets)
     val d_ways = RegInit(0.U(log2Ceil(coreParams.nL2TLBWays).W))
-    val d_set = RegInit(0.U(idxBits.W))
+    val d_hid = RegInit(0.U(handleBits.W))
     val dumped_htlb_idx = RegInit(0.U(idxBits.W))
 
-    val (l2_hit, l2_error, l2_hte, l2_htlb_ram, d_hte) = {
+    val (l2_hit, l2_error, l2_hte, l2_htlb_ram) = {
       val code = new ParityCode
       require(isPow2(coreParams.nL2TLBEntries))
       require(isPow2(coreParams.nL2TLBWays))
@@ -323,12 +323,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         assert((PopCount(s2_hit_vec) === 1.U) || s2_error, "L2 HTLB multi-hit")
       }
 
-      // for (i <- 0 until (nL2TLBSets - 1)) {
-      //   val testing_valid_vec = valid(0).asUInt
-      //   when (testing_valid_vec =/= 0.U) {
-      //     printf("Valid: %x\n", testing_valid_vec)
-      //   }
-      // }
 
       val s2_hte = Wire(new HTE)
       val s2_hit_entry = Mux1H(s2_hit_vec, s2_entry_vec)
@@ -359,9 +353,16 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         dumped_htlb_idx := 0.U
         set_idx := 0.U
         way_idx := 0.U
+
+        for (i <- 0 until (nL2TLBSets - 1)) {
+          val testing_valid_vec = valid(0).asUInt
+          when (testing_valid_vec =/= 0.U) {
+            printf("Valid: %x\n", testing_valid_vec)
+          }
+        }
       }
 
-      val dr_valid_vec = ShiftRegister(valid.map(_(set_idx)).asUInt, 1)
+      val dr_valid_vec = ShiftRegister(valid.map(_(set_idx)).asUInt, 2)
       val ds0_valid = state === s_dumping
       val ds1_valid = RegNext(ds0_valid)
       val ds2_valid = RegNext(ds1_valid)
@@ -394,19 +395,19 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         ds2_hte.small := DontCare
 
         when(ds2_hit) {
-          d_set := set_idx - 1.U
+          d_hid := Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx)
           printf(
             "[HTW]  L2Entry: %d: %d, Valid(%d) %x - %x\n",
-            set_idx - 1.U,
+            set_idx, 
             way,
             dr_valid_vec(way),
-            Cat(ds2_hte.tag, set_idx - 1.U),
+            Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx),
             ds2_hte.addr
           )
           next_state := s_dumping_wait
         }
 
-        printf("Set: %d, Way: %d - Valid(%d)\n", set_idx, way, dr_valid_vec(way))
+        printf("Set: %d, Way: %d - Valid(%d), ds2(%d)\n", set_idx, way, dr_valid_vec(way), ds2_valid)
 
         l2_plru.access(set_idx, way)
       }.otherwise {
@@ -414,20 +415,20 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
 
       // FIXME: this doesn't work for ways > 1
-      way_idx := Mux((state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid), way_idx + 1.U, way_idx)
+      way_idx := Mux((state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid) && ds2_valid, way_idx + 1.U, way_idx)
 
-      when (way_idx === coreParams.nL2TLBWays.U && ((state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid))) {
+      when (way_idx === coreParams.nL2TLBWays.U && ((state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid)) && ds2_valid) {
         way_idx := 0.U
       }
 
-      set_idx := Mux(way_idx === coreParams.nL2TLBWays.U && ((state === s_dumping && !ds2_hit)), set_idx + 1.U, Mux(state === s_dumping_wait && mem_resp_valid, d_set + 1.U, set_idx))
+      set_idx := Mux(way_idx === coreParams.nL2TLBWays.U && (state === s_dumping && !ds2_hit), set_idx + 1.U, Mux(state === s_dumping_wait && mem_resp_valid, d_hid(idxBits-1,0) + 1.U, set_idx))
 
       // TODO: double check this exit condition?
       when (set_idx === nL2TLBSets.U && state === s_dumping) {
         next_state := s_ready
       }
 
-      (s2_hit, s2_error, s2_hte, Some(ram), ds2_hte)
+      (s2_hit, s2_error, s2_hte, Some(ram))
     }
     // printf("%d, %d, %d\n", l2_hit, l2_error, mem_resp_valid)
 
@@ -460,11 +461,11 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val d_hte_vaddr = io.dpath.customCSRs.htDump + (dcacheParams.nTLBSets*dcacheParams.nTLBWays*8).U + dumped_htlb_idx*8.U
 
     when (state === s_dumping_wait) {
-      printf("[HTW] Dumping hid %x to %x\n", Cat(d_hte.tag, d_set), d_hte_vaddr)
+      printf("[HTW] Dumping hid %x to %x (mem_resp_valid: %d)\n", d_hid, d_hte_vaddr, mem_resp_valid)
     }
 
     when (state === s_dumping_wait && mem_resp_valid) {
-      printf("[HTW] Finished dumping hid %x\n", Cat(d_hte.tag, d_set))
+      printf("[HTW] Finished dumping hid %x\n", d_hid)
       dumped_htlb_idx := dumped_htlb_idx + 1.U
       next_state := s_dumping
     }
@@ -488,16 +489,17 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.mem.req.bits.no_resp := false.B
     io.mem.req.bits.no_alloc := DontCare
     io.mem.req.bits.no_xcpt := DontCare
-    io.mem.req.bits.data := Mux(state === s_wait, DontCare, Cat(d_hte.tag, d_set))
-    io.mem.req.bits.mask := Mux(state === s_wait, DontCare, ((1 << coreDataBytes) - 1).U)
+    io.mem.req.bits.data := Mux(state === s_wait, 0.U, d_hid)
+    io.mem.req.bits.mask := Mux(state === s_wait, 0.U, ((1 << coreDataBytes) - 1).U)
 
 
     // TODO: This may need to change if we get an exception in the middle of a handle table walk
     io.mem.s1_kill := l2_hit || (state =/= s_wait && state =/= s_dumping_wait)
-    io.mem.s1_data := DontCare
+    io.mem.s1_data.data := Mux(state === s_wait, 0.U, d_hid)
+    io.mem.s1_data.mask := Mux(state === s_wait, 0.U, ((1 << coreDataBytes) - 1).U)
     io.mem.s2_kill := false.B
 
-    when (io.mem.s1_kill) {
+    when (io.mem.s1_kill && state === s_dumping_wait) {
       printf("acccidentally killed? - %d, %d\n", l2_hit, state)
     }
   }
