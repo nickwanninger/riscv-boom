@@ -86,11 +86,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       new_entry.immovable := getData().immovable
       new_entry.small := getData().small
       new_entry.phys := true.B
-      printf(
-        "[HTLB] New Phys Entry: %d, %x\n",
-        tag,
-        new_entry.addr
-      )
+      printf("[HTLB] New Entry (tag: %d): %x, %d, %d, %d\n", tag, new_entry.addr, new_entry.immovable, new_entry.small, new_entry.phys)
 
       data := new_entry.asUInt
     }
@@ -105,7 +101,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry()))
 
   // State Machine
-  val s_ready :: s_request :: s_wait :: s_wait_invalidate :: s_ht_dump :: s_ht_dump_wait :: s_ht_dumped :: Nil = Enum(7)
+  val s_ready :: s_request :: s_wait :: s_wait_invalidate :: s_victim_wait :: s_ht_dump :: s_ht_dump_wait :: s_ht_dumped :: Nil = Enum(8)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   state := OptimizationBarrier(next_state)
@@ -132,8 +128,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   }
 
   // Miss Logic
-  val victim_ready :: victim_wait :: Nil = Enum(2)
-  val victim = RegInit(victim_ready)
+  // val victim_ready :: victim_wait :: Nil = Enum(2)
+  // val victim = RegInit(victim_ready)
   val victim_entry = Reg(new Entry())
   val vic = victim_entry.data.asTypeOf(new HTLBEntryData)
 
@@ -145,7 +141,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     )
   }
 
-  io.htw.evict.valid := victim === victim_wait
+  io.htw.evict.valid := state === s_victim_wait
   io.htw.evict.bits.hid := victim_entry.tag
   io.htw.evict.bits.addr := vic.addr
   io.htw.evict.bits.phys := vic.phys
@@ -276,8 +272,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val waddr = Mux(r_sectored_hit, r_sectored_hit_addr, r_sectored_repl_addr)
     for ((e, i) <- entries.zipWithIndex) when(waddr === i.U) {
       // make a copy of the victim entry, and set the victim flag to notify the L2 HTLB
-      victim := Mux(e.valid && !io.sfence.valid, victim_wait, victim_ready)
-      victim_entry := RegNext(e)
+      next_state := Mux(e.valid && !io.sfence.valid, s_victim_wait, s_ready)
+      victim_entry := e
       e.invalidate()
       e.insert(r_refill_tag, newEntry)
     }
@@ -288,30 +284,30 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     Mux(valids.andR, alt, PriorityEncoder(~valids))
   }
 
-  when(victim === victim_wait && io.htw.evict_resp) {
-    victim := victim_ready
+  when(state === s_victim_wait && io.htw.evict_resp) {
+    next_state := s_ready
   }
 
   when(reset.asBool) {
     entries.foreach(_.invalidate())
   }
 
-  // for (w <- 0 until lsuWidth) {
-  //   for ((e, i) <- entries.zipWithIndex) {
-  //     when(e.valid) {
-  //       val entry = e.data.asTypeOf(new HTLBEntryData)
-  //       printf(
-  //         "[HTLB] Entry %d: %d,  %x, %x (%d), %d\n",
-  //         i.U,
-  //         e.valid,
-  //         e.tag,
-  //         entry.addr,
-  //         entry.phys,
-  //         entry.immovable
-  //       )
-  //     }
-  //   }
-  // }
+  for (w <- 0 until lsuWidth) {
+    for ((e, i) <- entries.zipWithIndex) {
+      when(e.valid) {
+        val entry = e.data.asTypeOf(new HTLBEntryData)
+        printf(
+          "[HTLB] Entry %d: %d,  %x, %x (%d), %d\n",
+          i.U,
+          e.valid,
+          e.tag,
+          entry.addr,
+          entry.phys,
+          entry.immovable
+        )
+      }
+    }
+  }
 
   // FSM Logic - get .way from plru, access it, get .way again. Do it until counter === n_ways for hits, go to final state, this marks completion, send resp to commit somehow, and then this is the end of the instruction.
 
