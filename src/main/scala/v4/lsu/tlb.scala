@@ -318,6 +318,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   io.ptw.req.bits := DontCare
   io.ptw.req.bits.valid := !io.kill
   io.ptw.req.bits.bits.addr := r_refill_tag
+  io.ptw.l1miss := do_refill || tlb_miss.orR
 
   if (usingVM) {
     val sfence = io.sfence.valid

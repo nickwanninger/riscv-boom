@@ -339,7 +339,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   htlb.io.htDump <> io.core.htDump
 
   // TODO: condition this on privilege level when we get to linux and running things not in S
-  val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase =/= 0.U && io.core.status.prv <= (ENABLE_HTLB - 1).U
+  val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase =/= 0.U && (io.core.status.prv + 1.U) <= ENABLE_HTLB.U
 
   val clear_store     = WireInit(false.B)
 
@@ -914,7 +914,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     // when (!exe_tlb_miss(w) && !exe_h_passthr(w)) {
     //  printf("exe_tlb_paddr(%d): %x, htlb: %x: \n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr)
     // }
-    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w) && !exe_passthr(w)
+    htlb.io.tlb(w).valid := false.B // !exe_tlb_miss(w) && small_handle_criterium(w) && !exe_passthr(w)
     htlb.io.tlb(w).bits := exe_tlb_paddr(w)(paddrBits-1, 12)
 
     when (mem_xcpt_valids(w))

@@ -144,8 +144,9 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   io.htw.evict.valid := state === s_victim_wait
   io.htw.evict.bits.hid := victim_entry.tag
   io.htw.evict.bits.addr := vic.addr
-  io.htw.evict.bits.phys := vic.phys
+  io.htw.evict.bits.phys := false.B //vic.phys
   io.htw.evict.bits.small := vic.small
+  io.htw.l1_dumped := state === s_ht_dumped
 
   // Utilities to help respond
   val addr = widthMap(w =>
@@ -326,7 +327,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val entry_idx = RegInit(0.U((log2Ceil(entries.size) + 1).W))
   val dumped_entry_idx = RegInit(0.U((log2Ceil(entries.size) + 1).W))
   
-  when(io.htDump.orR && state =/= s_ht_dumped && state =/= s_ht_dump && state =/= s_ht_dump_wait) {
+  when(io.htDump.orR && state === s_ready) {
     printf("[HTLB] Starting to dump L1\n")
     entry_idx := 0.U
     dumped_entry_idx := 0.U
@@ -369,7 +370,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   entry_idx := Mux((state === s_ht_dump && !hit) || (state === s_ht_dump_wait && mem_resp_valid), entry_idx + 1.U, entry_idx);
 
   io.htw.l1miss := do_refill || htlb_miss.orR
-  io.htw.l1hit := htlb_hit.orR && !(do_refill || htlb_miss.orR)
 
   io.mem.keep_clock_enabled := false.B
 

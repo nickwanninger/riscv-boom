@@ -52,16 +52,14 @@ class HTLBHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
   val resp = Flipped(Valid(new HTWResp))
   val evict = Decoupled(new EvictionReq)
   val evict_resp = Input(Bool())
-
-  val l1miss = Bool()
-  val l1hit = Bool()
+  val l1_dumped = Output(Bool())
+  val l1miss = Output(Bool())
 }
 
 class HTWPerfEvents(implicit p: Parameters) extends BoomBundle()(p) {
   val l2miss = Bool()
   val l2hit = Bool()
   val l1miss = Bool()
-  val l1hit = Bool()
 }
 
 class DatapathHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
@@ -306,7 +304,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val way_idx = RegInit(0.U((log2Ceil(coreParams.nL2TLBWays) + 1).W))
       io.dpath.htDumped := set_idx === nL2TLBSets.U && state === s_dumping
 
-      when(io.dpath.customCSRs.htDump.orR && (state =/= s_dumping && state =/= s_dumping_wait)) {
+      when(io.requestor.l1_dumped && state === s_ready) {
         printf("[HTW] Starting to dump L2\n")
         next_state := s_dumping
       }
@@ -318,8 +316,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       printf("Valid: %x\n", valid(0)(64,0).asUInt)
 
       val pipeline_stage = RegInit(0.U(2.W))
-
-
 
       val dr_valid_vec = ShiftRegister(valid.map(_(set_idx)).asUInt, 2)
       val ds0_valid = state === s_dumping
@@ -438,7 +434,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           io.requestor.req.valid,
           s_req,
           Mux(io.requestor.evict.valid, s_victim, 
-          Mux(io.dpath.customCSRs.htDump.orR && state =/= s_dumping_wait, s_dumping,
+          Mux(io.requestor.l1_dumped && state =/= s_dumping_wait, s_dumping,
           s_ready)
         ))
 
@@ -498,7 +494,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     }
 
     when (io.mem.s2_nack) {
-      assert(state === s_wait2 || state === s_dumping_wait) // TODO: add nack support while dumping
+      assert(state === s_wait2 || state === s_dumping_wait)
       next_state := Mux(state === s_wait2, s_req, s_dumping_wait)
     }
 
@@ -506,8 +502,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     io.dpath.perf.l2hit := l2_hit && !l2_error
     io.dpath.perf.l2miss := !l2_hit && !l2_error && mem_resp_valid
-    io.dpath.perf.l1hit := io.requestor.l1hit
-    io.dpath.perf.l1miss := io.requestor.l1hit
+    io.dpath.perf.l1miss := io.requestor.l1miss
 
     // HT Lookup
     val hte_vaddr =
