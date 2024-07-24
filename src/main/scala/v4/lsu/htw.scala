@@ -14,6 +14,7 @@ import freechips.rocketchip.rocket.HellaCacheIO
 import boom.v4.common._
 import freechips.rocketchip.rocket.PRV.U
 import freechips.rocketchip.tilelink.TLMessages.c
+import freechips.rocketchip.diplomacy.BufferParams.pipe
 
 class HTE(implicit p: Parameters) extends BoomBundle()(p) {
   val small = Bool()
@@ -317,10 +318,11 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
       val pipeline_stage = RegInit(0.U(2.W))
 
-      val dr_valid_vec = ShiftRegister(valid.map(_(set_idx)).asUInt, 2)
-      val ds0_valid = state === s_dumping
+      // val dr_valid_vec = ShiftRegister(valid.map(_(set_idx)).asUInt, 2)
+      val dr_valid_vec = valid.map(_(set_idx)).asUInt
+      val ds0_valid = state === s_dumping && pipeline_stage === 0.U
       val ds1_valid = RegNext(ds0_valid)
-      val ds2_valid = RegNext(ds1_valid)
+      val ds2_valid = RegNext(ds1_valid) && pipeline_stage === 2.U
       // read from tlb idx
       val ds1_rdata = ram.read(set_idx, ds0_valid)
       val ds2_rdata =
@@ -329,15 +331,21 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         .map(way => dr_valid_vec(way) && ds2_rdata(way).error)
         .orR
       when(ds2_valid && ds2_error) { valid.foreach { _ := 0.U } }
+      printf("ds2_valid: %d, ds2_error: %d\n", ds2_valid, ds2_error)
       // decode
       val ds2_entry_vec =
         ds2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2TLBSets)))
+
+      // TODO: reading old ds2_entry_vec, before new one comes in.
+      // it is there for 3 cycles before the real one comes in. do we not restart the reading clock?
+      printf("ds2_entry_vec: %x\n", ds2_entry_vec(0).addr)
 
       val ds2_hit_vec = (0 until coreParams.nL2TLBWays).map(way =>
         dr_valid_vec(way)
       )
 
-      val ds2_hit = ds2_valid && ds2_hit_vec.orR
+      val ds2_hit = ds2_valid && ds2_hit_vec.orR && !ds2_error
+      // val ds2_hit = ds2_valid && ds2_hit_vec.orR && !ds2_error
 
       val ds2_hte = Wire(new L2HTLBEntry(nL2TLBSets))
       when (state === s_dumping && way_idx < coreParams.nL2TLBWays.U && set_idx < nL2TLBSets.U) {
@@ -368,29 +376,60 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         ds2_hte := DontCare
       }
 
-      // Update pipeline stage
-      when (state === s_dumping) {
-        pipeline_stage := Mux(pipeline_stage === 2.U, 0.U, pipeline_stage + 1.U)
-      }
-
+      // Updated logic for set_idx
+      val set_idx_update = way_idx === coreParams.nL2TLBWays.U && (state === s_dumping)
       // Logic for updating way_idx
-      val way_idx_update = ((state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid)) && ds2_valid
+      val way_idx_update = ((state === s_dumping && !ds2_hit && pipeline_stage === 2.U) || (state === s_dumping_wait && mem_resp_valid)) && !set_idx_update
       way_idx := Mux(way_idx_update, 
-                      Mux(way_idx === coreParams.nL2TLBWays.U, 0.U, way_idx + 1.U),
+                      way_idx + 1.U,
                       way_idx)
 
-      // Updated logic for set_idx
-      val set_idx_update = way_idx === coreParams.nL2TLBWays.U && pipeline_stage === 2.U && !ds2_hit
+      // Update pipeline stage
+      when (pipeline_stage === 2.U && RegNext(way_idx_update)) {
+        pipeline_stage := 0.U
+      } .elsewhen(state === s_dumping) {
+        pipeline_stage := Mux(pipeline_stage === 2.U, 2.U, pipeline_stage + 1.U)
+      }
+
       set_idx := Mux(set_idx_update, 
                      set_idx + 1.U, 
-                     Mux(state === s_dumping_wait && mem_resp_valid, 
+                     Mux(state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U, 
                          d_hid(idxBits-1,0) + 1.U, 
                          set_idx))
 
-      // Reset pipeline stage when moving to a new set
-      when (set_idx =/= RegNext(set_idx)) {
-        pipeline_stage := 0.U
+      when (set_idx_update || (state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U)) {
+        way_idx := 0.U
       }
+
+      printf("SetIdx: %d, WayIdx: %d\n", set_idx, way_idx)
+      printf("SetIdxUpdate: %d, WayIdxUpdate: %d\n", set_idx_update, way_idx_update)
+      printf("Pipeline Stage: %d\n", pipeline_stage)
+
+      // Reset pipeline stage when moving to a new set
+      // when (way_idx_update) {
+        // pipeline_stage := 0.U
+      // }
+
+      // FIXME: this doesn't work for ways > 1
+
+      set_idx := Mux(set_idx_update, 
+                     set_idx + 1.U, 
+                     Mux(state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U, 
+                         d_hid(idxBits-1,0) + 1.U, 
+                         set_idx))
+
+      when (set_idx_update || (state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U)) {
+        way_idx := 0.U
+      }
+
+      printf("SetIdx: %d, WayIdx: %d\n", set_idx, way_idx)
+      printf("SetIdxUpdate: %d, WayIdxUpdate: %d\n", set_idx_update, way_idx_update)
+      printf("Pipeline Stage: %d\n", pipeline_stage)
+
+      // Reset pipeline stage when moving to a new set
+      // when (way_idx_update) {
+        // pipeline_stage := 0.U
+      // }
 
       // FIXME: this doesn't work for ways > 1
       // way_idx := Mux(((state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid)) && ds2_valid, way_idx + 1.U, way_idx)

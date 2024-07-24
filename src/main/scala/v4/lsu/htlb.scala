@@ -293,22 +293,22 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     entries.foreach(_.invalidate())
   }
 
-  for (w <- 0 until lsuWidth) {
-    for ((e, i) <- entries.zipWithIndex) {
-      when(e.valid) {
-        val entry = e.data.asTypeOf(new HTLBEntryData)
-        printf(
-          "[HTLB] Entry %d: %d,  %x, %x (%d), %d\n",
-          i.U,
-          e.valid,
-          e.tag,
-          entry.addr,
-          entry.phys,
-          entry.immovable
-        )
-      }
-    }
-  }
+  // for (w <- 0 until lsuWidth) {
+  //   for ((e, i) <- entries.zipWithIndex) {
+  //     when(e.valid) {
+  //       val entry = e.data.asTypeOf(new HTLBEntryData)
+  //       printf(
+  //         "[HTLB] Entry %d: %d,  %x, %x (%d), %d\n",
+  //         i.U,
+  //         e.valid,
+  //         e.tag,
+  //         entry.addr,
+  //         entry.phys,
+  //         entry.immovable
+  //       )
+  //     }
+  //   }
+  // }
 
   // FSM Logic - get .way from plru, access it, get .way again. Do it until counter === n_ways for hits, go to final state, this marks completion, send resp to commit somehow, and then this is the end of the instruction.
 
