@@ -470,7 +470,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           io.requestor.req.valid,
           s_req,
           Mux(io.requestor.evict.valid, s_victim, 
-          Mux(io.requestor.l1_dumped && state =/= s_dumping_wait, s_dumping,
+          Mux(io.dpath.customCSRs.htDump.orR && state =/= s_dumping_wait, s_dumping,
           s_ready)
         ))
 
