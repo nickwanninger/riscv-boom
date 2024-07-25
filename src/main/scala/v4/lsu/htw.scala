@@ -59,7 +59,6 @@ class HTLBHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
 
 class HTWPerfEvents(implicit p: Parameters) extends BoomBundle()(p) {
   val l2miss = Bool()
-  val l2hit = Bool()
   val l1miss = Bool()
 }
 
@@ -268,7 +267,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       printf("r_idx: %x, r_tag: %x, entry-vec-addr: %x\n", r_idx, r_tag, s2_entry_vec(0).addr)
       val s2_hit = s2_valid && s2_hit_vec.orR
       io.dpath.perf.l2miss := s2_valid && !(s2_hit_vec.orR)
-      io.dpath.perf.l2hit := s2_hit
       when(s2_hit) {
         // l2_plru.access(r_idx, OHToUInt(s2_hit_vec))
         val invl_mask = UIntToOH(r_idx)
@@ -307,7 +305,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
       when(io.requestor.l1_dumped && state === s_ready) {
         printf("[HTW] Starting to dump L2\n")
-        next_state := s_dumping
       }
 
       when (!io.dpath.customCSRs.htDump.orR && state === s_dumping) {
@@ -526,7 +523,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     }
 
     printf("State: %d\n", state)
-    when (mem_resp_valid && state =/= s_dumping_wait) {
+    // when (mem_resp_valid && state =/= s_dumping_wait) {
+    when (mem_resp_valid && (state =/= s_dumping_wait && state =/= s_dumping)) {
       // assert(state === s_wait3)
       next_state := s_ready
       resp_valid := true.B
@@ -539,8 +537,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     io.requestor.evict_resp := l2_refill && !invalidated
 
-    io.dpath.perf.l2hit := l2_hit && !l2_error
-    io.dpath.perf.l2miss := !l2_hit && !l2_error && mem_resp_valid
     io.dpath.perf.l1miss := io.requestor.l1miss
 
     // HT Lookup
@@ -564,7 +560,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     // Prepare Memory Request
     io.mem.keep_clock_enabled := false.B
 
-    io.mem.req.valid := state === s_req || state === s_dummy1 || state === s_dumping_wait
+    io.mem.req.valid := state === s_req || state === s_dummy1 || (state === s_dumping_wait && !mem_resp_valid)
     io.mem.req.bits.phys := false.B
     io.mem.req.bits.cmd := Mux(state === s_dumping_wait, M_XWR, M_XRD)
     io.mem.req.bits.size :=
