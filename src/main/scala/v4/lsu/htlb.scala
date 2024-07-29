@@ -25,6 +25,11 @@ class HTLBResp(implicit p: Parameters) extends BoomBundle()(p) {
   val small = Bool()
 }
 
+class TLBResp(implicit p: Parameters) extends BoomBundle()(p) {
+  val hid = UInt(xLen.W)
+  val paddr = UInt(ppnBits.W)
+}
+
 case class HTLBConfig(
     nSets: Int,
     nWays: Int
@@ -35,7 +40,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val req = Flipped(Vec(lsuWidth, Decoupled(new HTLBReq)))
     val resp = Vec(lsuWidth, new HTLBResp)
     val htw = new HTLBHTWIO
-    val tlb = Flipped(Vec(lsuWidth, Valid(UInt(ppnBits.W))))
+    val tlb = Flipped(Vec(lsuWidth, Valid(new TLBResp)))
     val sfence = Input(Valid(new SFenceReq))
     val mem = new HellaCacheIO
     val htDump = Input(UInt(xLen.W))
@@ -73,22 +78,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
     def unlock(hid: UInt) = {
       getData().immovable := false.B
-    }
-
-    def setPAddr(ppn: UInt, valid: Bool) = {
-      val tmp_ppn = RegInit(ppn)
-      val new_entry = Wire(new HTLBEntryData())
-      new_entry.addr := Mux(
-        valid,
-        Cat(tmp_ppn, getData().addr(11, 0)),
-        getData().addr
-      )
-      new_entry.immovable := getData().immovable
-      new_entry.small := getData().small
-      new_entry.phys := true.B
-      printf("[HTLB] New Entry (tag: %d): %x, %d, %d, %d\n", tag, new_entry.addr, new_entry.immovable, new_entry.small, new_entry.phys)
-
-      data := new_entry.asUInt
     }
   }
 
@@ -144,7 +133,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   io.htw.evict.valid := state === s_victim_wait
   io.htw.evict.bits.hid := victim_entry.tag
   io.htw.evict.bits.addr := vic.addr
-  io.htw.evict.bits.phys := false.B //vic.phys
+  io.htw.evict.bits.phys := vic.phys
   io.htw.evict.bits.small := vic.small
   io.htw.l1_dumped := state === s_ht_dumped
 
@@ -186,7 +175,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       effective_address,
       addr(w) + io.req(w).bits.haddr(handleBits - 1, 0)
     )
-    io.resp(w).phys := phys(w) =/= false.B && hm_enabled(w)
+    io.resp(w).phys := phys(w) && hm_enabled(w)
     io.resp(w).small := small(w)
 
     when(!io.resp(w).miss && !io.req(w).bits.passthrough) {
@@ -222,9 +211,20 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
     when(io.tlb(w).valid) {
       // debug print for small handlen optimization
-      printf("[HTLB] paddr for hid %x: %x\n", hid(w), io.tlb(w).bits)
-      for ((e, i) <- entries.zipWithIndex) when(e.hit(hid(w))) {
-        e.setPAddr(io.tlb(w).bits, io.tlb(w).valid)
+      printf("[HTLB] paddr for hid %x: %x\n", io.tlb(w).bits.hid(xLen - 2, handleBits), io.tlb(w).bits.paddr)
+      for ((e, i) <- entries.zipWithIndex) when(e.hit(io.tlb(w).bits.hid(xLen - 2, handleBits))) {
+        // e.setPAddr(io.tlb(w).bits.paddr)
+
+        val ppn = io.tlb(w).bits.paddr
+        val new_entry = Wire(new HTLBEntryData())
+        new_entry.addr := Cat(ppn, e.getData().addr(corePgIdxBits - 1, 0))
+        printf("New Entry Addr: %x\n", new_entry.addr)
+        new_entry.immovable := e.getData().immovable
+        new_entry.small := e.getData().small
+        new_entry.phys := true.B
+        printf("[HTLB] New Entry (tag: %d): %x, %d, %d, %d\n", e.tag, new_entry.addr, new_entry.immovable, new_entry.small, new_entry.phys)
+
+        e.data := new_entry.asUInt
       }
     }
   }

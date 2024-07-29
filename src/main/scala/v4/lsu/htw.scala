@@ -449,7 +449,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     // Debug HTW response
     val tmp = mem_resp_data.asTypeOf(new HTE())
     val pte = WireDefault(tmp)
-    when(mem_resp_valid && state === s_wait2) {
+    when(mem_resp_valid && state === s_wait3) {
       printf(
         "[HTW] Found HTE - Frozen: %x, Reserved: %x, Addr: %x, Small: %d\n",
         pte.frozen,

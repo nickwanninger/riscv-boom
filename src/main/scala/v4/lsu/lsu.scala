@@ -914,8 +914,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     // when (!exe_tlb_miss(w) && !exe_h_passthr(w)) {
     //  printf("exe_tlb_paddr(%d): %x, htlb: %x: \n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr)
     // }
-    htlb.io.tlb(w).valid := false.B // !exe_tlb_miss(w) && small_handle_criterium(w) && !exe_passthr(w)
-    htlb.io.tlb(w).bits := exe_tlb_paddr(w)(paddrBits-1, 12)
+    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w) && !exe_passthr(w)
+    htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)
+    htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits)
 
     when (mem_xcpt_valids(w))
     {
