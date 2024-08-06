@@ -1376,6 +1376,13 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.lsu.htBase := custom_csrs.htBase
   io.lsu.htDump := custom_csrs.htDump
 
+  val htlb_enabled = (ENABLE_HTLB > 0).B && custom_csrs.htBase =/= 0.U && (csr.io.status.prv + 1.U) <= ENABLE_HTLB.U
+
+  // Create a default invalid IOBundle
+  val defaultInvalid = Wire(Valid(new freechips.rocketchip.rocket.SFenceReq))
+  defaultInvalid.bits := DontCare
+  defaultInvalid.valid := false.B
+
   //-------------------------------------------------------------
   //-------------------------------------------------------------
   // Page Table Walker
@@ -1384,7 +1391,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.ptw.status     := csr.io.status
   io.ptw.pmp        := csr.io.pmp
   io.ptw.sfence     := io.ifu.sfence
-  io.htw.sfence     := io.ifu.sfence
+  io.htw.sfence     := Mux(htlb_enabled, io.ifu.sfence, defaultInvalid)
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

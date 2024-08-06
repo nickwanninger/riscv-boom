@@ -218,7 +218,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         val ppn = io.tlb(w).bits.paddr
         val new_entry = Wire(new HTLBEntryData())
         new_entry.addr := Cat(ppn, e.getData().addr(corePgIdxBits - 1, 0))
-        printf("New Entry Addr: %x\n", new_entry.addr)
+        // printf("New Entry Addr: %x\n", new_entry.addr)
         new_entry.immovable := e.getData().immovable
         new_entry.small := e.getData().small
         new_entry.phys := true.B
@@ -273,7 +273,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val waddr = Mux(r_sectored_hit, r_sectored_hit_addr, r_sectored_repl_addr)
     for ((e, i) <- entries.zipWithIndex) when(waddr === i.U) {
       // make a copy of the victim entry, and set the victim flag to notify the L2 HTLB
-      next_state := Mux(e.valid && !io.sfence.valid, s_victim_wait, s_ready)
+      next_state := Mux(e.valid && !sfence, s_victim_wait, s_ready)
       victim_entry := e
       e.invalidate()
       e.insert(r_refill_tag, newEntry)
@@ -403,7 +403,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   io.mem.req.bits.data := d_hid
   io.mem.req.bits.mask := ((1 << coreDataBytes) - 1).U
 
-  printf("io.mem.req.valid: %d, s1_kill: %d\n", io.mem.req.valid, io.mem.s1_kill)
+  // printf("io.mem.req.valid: %d, s1_kill: %d\n", io.mem.req.valid, io.mem.s1_kill)
 
   io.mem.s1_kill := state =/= s_ht_dump_wait
   io.mem.s1_data.data := d_hid

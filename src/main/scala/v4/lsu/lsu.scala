@@ -799,6 +799,11 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   // val exe_h_passthr = widthMap(w => !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)))
   val exe_h_passthr = widthMap(w => Mux(htlb_enabled, !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)), true.B))
 
+  // Create a default invalid IOBundle
+  val defaultInvalid = Wire(Valid(new freechips.rocketchip.rocket.SFenceReq))
+  defaultInvalid.bits := DontCare
+  defaultInvalid.valid := false.B
+
   for (w <- 0 until lsuWidth) {
     // printf("will retry fire load: %d, store: %d (%x)\n", will_fire_load_retry(w), will_fire_store_retry(w), exe_htlb_vaddr(w))
     // printf("agen fire load: %d, store: %d (%x)\n", will_fire_load_agen(w), will_fire_store_agen(w), exe_htlb_vaddr(w))
@@ -806,7 +811,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.req(w).valid            := exe_htlb_valid(w)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_h_passthr(w)
-    htlb.io.sfence                  := exe_sfence
+    htlb.io.sfence                  := Mux(htlb_enabled, exe_sfence, defaultInvalid)
     when (htlb.io.req(w).valid && htlb.io.req(w).bits.haddr =/= 0.U && htlb_enabled && !htlb.io.req(w).bits.passthrough) {
       printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough)
     }
@@ -1963,7 +1968,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         io.hellacache.resp.bits.data   := io.dmem.resp(w).bits.data
       }
       when (io.dmem.nack(w).valid && io.dmem.nack(w).bits.is_hella) {
-        printf("nacked?\n")
+        // printf("nacked?\n")
         hella_state := h_replay
       }
     }
