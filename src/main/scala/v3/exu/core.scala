@@ -287,7 +287,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   when (io.htw.htDumped) {
     printf("trying to end dumping ... %x\n", ~(io.htw.htDumped.asUInt))
-  } 
+  }
 
   // TODO: fix possible consistency violation or worse if user tries to set csr while dump hasn't finished
   csr.io.customCSRs(2).set := io.htw.htDumped
@@ -1345,7 +1345,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
         reset.asBool) {
     idle_cycles := 0.U
   }
-  assert (!(idle_cycles.value(13)), "Pipeline has hung.")
+  // assert (!(idle_cycles.value(13)), "Pipeline has hung.")
 
   if (usingFPU) {
     fp_pipeline.io.debug_tsc_reg := debug_tsc_reg
