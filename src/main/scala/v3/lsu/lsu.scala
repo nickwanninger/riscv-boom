@@ -153,6 +153,10 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
     val release = Bool()
     val tlbMiss = Bool()
   })
+
+  val status = Input(new rocket.MStatus)
+  val htBase = Input(UInt(xLen.W))
+  val htDump = Input(UInt(xLen.W))
 }
 
 class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
@@ -160,14 +164,17 @@ class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
   val ptw   = new rocket.TLBPTWIO
   val core  = new LSUCoreIO
   val dmem  = new LSUDMemIO
+  val htw   = new HTLBHTWIO
 
   val hellacache = Flipped(new freechips.rocketchip.rocket.HellaCacheIO)
+
+  val htlb_mem = new rocket.HellaCacheIO
 }
 
 class LDQEntry(implicit p: Parameters) extends BoomBundle()(p)
     with HasBoomUOP
 {
-  val addr                = Valid(UInt(coreMaxAddrBits.W))
+  val addr                = Valid(UInt(xLen.W))
   val addr_is_virtual     = Bool() // Virtual address, we got a TLB miss
   val addr_is_uncacheable = Bool() // Uncacheable, wait until head of ROB to execute
 
@@ -188,7 +195,7 @@ class LDQEntry(implicit p: Parameters) extends BoomBundle()(p)
 class STQEntry(implicit p: Parameters) extends BoomBundle()(p)
    with HasBoomUOP
 {
-  val addr                = Valid(UInt(coreMaxAddrBits.W))
+  val addr                = Valid(UInt(xLen.W))
   val addr_is_virtual     = Bool() // Virtual address, we got a TLB miss
   val data                = Valid(UInt(xLen.W))
 
@@ -252,7 +259,13 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.perf.acquire := io.dmem.perf.acquire
   io.core.perf.release := io.dmem.perf.release
 
+  val htlb = Module(new HTLB(rocket.TLBConfig(1, dcacheParams.nTLBWays*dcacheParams.nTLBSets)))
+  io.htw <> htlb.io.htw
+  io.htlb_mem <> htlb.io.mem
+  htlb.io.htDump <> io.core.htDump
 
+  // TODO: condition this on privilege level when we get to linux and running things not in S
+  val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase =/= 0.U && (io.core.status.prv + 1.U) <= ENABLE_HTLB.U
 
   val clear_store     = WireInit(false.B)
   val live_store_mask = RegInit(0.U(numStqEntries.W))
@@ -523,17 +536,21 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   // Controller logic. Arbitrate which request actually fires
 
   val exe_tlb_valid = Wire(Vec(memWidth, Bool()))
+  val exe_htlb_valid = Wire(Vec(memWidth, Bool()))
   for (w <- 0 until memWidth) {
+    var htlb_avail = true.B
     var tlb_avail  = true.B
     var dc_avail   = true.B
     var lcam_avail = true.B
     var rob_avail  = true.B
 
-    def lsu_sched(can_fire: Bool, uses_tlb:Boolean, uses_dc:Boolean, uses_lcam: Boolean, uses_rob:Boolean): Bool = {
-      val will_fire = can_fire && !(uses_tlb.B && !tlb_avail) &&
+    def lsu_sched(can_fire: Bool, uses_htlb: Boolean, uses_tlb: Boolean, uses_dc: Boolean, uses_lcam: Boolean, uses_rob: Boolean): Bool = {
+      val will_fire = can_fire && !(uses_htlb.B && !htlb_avail) &&
+                                  !(uses_tlb.B && !tlb_avail) &&
                                   !(uses_lcam.B && !lcam_avail) &&
                                   !(uses_dc.B && !dc_avail) &&
                                   !(uses_rob.B && !rob_avail)
+      htlb_avail  = htlb_avail  && !(will_fire && uses_htlb.B)
       tlb_avail  = tlb_avail  && !(will_fire && uses_tlb.B)
       lcam_avail = lcam_avail && !(will_fire && uses_lcam.B)
       dc_avail   = dc_avail   && !(will_fire && uses_dc.B)
@@ -549,18 +566,18 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     // Notes on performance
     //  - Prioritize releases, this speeds up cache line writebacks and refills
     //  - Store commits are lowest priority, since they don't "block" younger instructions unless stq fills up
-    will_fire_load_incoming (w) := lsu_sched(can_fire_load_incoming (w) , true , true , true , false) // TLB , DC , LCAM
-    will_fire_stad_incoming (w) := lsu_sched(can_fire_stad_incoming (w) , true , false, true , true)  // TLB ,    , LCAM , ROB
-    will_fire_sta_incoming  (w) := lsu_sched(can_fire_sta_incoming  (w) , true , false, true , true)  // TLB ,    , LCAM , ROB
-    will_fire_std_incoming  (w) := lsu_sched(can_fire_std_incoming  (w) , false, false, false, true)  //                 , ROB
-    will_fire_sfence        (w) := lsu_sched(can_fire_sfence        (w) , true , false, false, true)  // TLB ,    ,      , ROB
-    will_fire_release       (w) := lsu_sched(can_fire_release       (w) , false, false, true , false) //            LCAM
-    will_fire_hella_incoming(w) := lsu_sched(can_fire_hella_incoming(w) , true , true , false, false) // TLB , DC
-    will_fire_hella_wakeup  (w) := lsu_sched(can_fire_hella_wakeup  (w) , false, true , false, false) //     , DC
-    will_fire_load_retry    (w) := lsu_sched(can_fire_load_retry    (w) , true , true , true , false) // TLB , DC , LCAM
-    will_fire_sta_retry     (w) := lsu_sched(can_fire_sta_retry     (w) , true , false, true , true)  // TLB ,    , LCAM , ROB // TODO: This should be higher priority
-    will_fire_load_wakeup   (w) := lsu_sched(can_fire_load_wakeup   (w) , false, true , true , false) //     , DC , LCAM1
-    will_fire_store_commit  (w) := lsu_sched(can_fire_store_commit  (w) , false, true , false, false) //     , DC
+    will_fire_load_incoming (w) := lsu_sched(can_fire_load_incoming (w) , true , true, true , true , false) // TLB , DC , LCAM
+    will_fire_stad_incoming (w) := lsu_sched(can_fire_stad_incoming (w) , true , true , false, true , true)  // TLB ,    , LCAM , ROB
+    will_fire_sta_incoming  (w) := lsu_sched(can_fire_sta_incoming  (w) , true , true, false, true , true)  // TLB ,    , LCAM , ROB
+    will_fire_std_incoming  (w) := lsu_sched(can_fire_std_incoming  (w) , false, false, false, false, true)  //                 , ROB
+    will_fire_sfence        (w) := lsu_sched(can_fire_sfence        (w) , true , true, false, false, true)  // TLB ,    ,      , ROB
+    will_fire_release       (w) := lsu_sched(can_fire_release       (w) , false, false, false, true , false) //            LCAM
+    will_fire_hella_incoming(w) := lsu_sched(can_fire_hella_incoming(w) , true , true, true , false, false) // TLB , DC
+    will_fire_hella_wakeup  (w) := lsu_sched(can_fire_hella_wakeup  (w) , false, false, true , false, false) //     , DC
+    will_fire_load_retry    (w) := lsu_sched(can_fire_load_retry    (w) , true , true, true , true , false) // TLB , DC , LCAM
+    will_fire_sta_retry     (w) := lsu_sched(can_fire_sta_retry     (w) , true , true, false, true , true)  // TLB ,    , LCAM , ROB // TODO: This should be higher priority
+    will_fire_load_wakeup   (w) := lsu_sched(can_fire_load_wakeup   (w) , false, false, true, true , false) //     , DC , LCAM1
+    will_fire_store_commit  (w) := lsu_sched(can_fire_store_commit  (w) , false, false, true , false, false) //     , DC
 
 
     assert(!(exe_req(w).valid && !(will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w) || will_fire_std_incoming(w) || will_fire_sfence(w))))
@@ -572,6 +589,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     } .elsewhen (will_fire_load_retry(w)) {
       block_load_mask(ldq_retry_idx)            := true.B
     }
+    exe_htlb_valid(w) := !htlb_avail
     exe_tlb_valid(w) := !tlb_avail
   }
   assert((memWidth == 1).B ||
@@ -602,7 +620,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                     Mux(will_fire_hella_incoming(w)  , NullMicroOp,
                                                        NullMicroOp)))))
 
-  val exe_tlb_vaddr = widthMap(w =>
+  val exe_htlb_vaddr = widthMap(w =>
                     Mux(will_fire_load_incoming (w) ||
                         will_fire_stad_incoming (w) ||
                         will_fire_sta_incoming  (w)  , exe_req(w).bits.addr,
@@ -638,20 +656,54 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                    Mux(will_fire_hella_incoming(w)  , hella_req.cmd,
                                                       0.U)))
 
-  val exe_passthr= widthMap(w =>
-                   Mux(will_fire_hella_incoming(w)  , hella_req.phys,
-                                                      false.B))
   val exe_kill   = widthMap(w =>
                    Mux(will_fire_hella_incoming(w)  , io.hellacache.s1_kill,
                                                       false.B))
+
+  //--------------------------------------------
+  // HTLB Access
+
+  // val exe_h_passthr = widthMap(w => !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)))
+  val exe_h_passthr = widthMap(w => Mux(htlb_enabled, !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)), true.B))
+
+  // Create a default invalid IOBundle
+  val defaultInvalid = Wire(Valid(new rocket.SFenceReq))
+  defaultInvalid.bits := DontCare
+  defaultInvalid.valid := false.B
+
   for (w <- 0 until memWidth) {
-    dtlb.io.req(w).valid            := exe_tlb_valid(w)
+    // printf("will retry fire load: %d, store: %d (%x)\n", will_fire_load_retry(w), will_fire_store_retry(w), exe_htlb_vaddr(w))
+    // printf("agen fire load: %d, store: %d (%x)\n", will_fire_load_agen(w), will_fire_store_agen(w), exe_htlb_vaddr(w))
+
+    htlb.io.req(w).valid            := exe_htlb_valid(w)
+    htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
+    htlb.io.req(w).bits.passthrough := exe_h_passthr(w)
+    htlb.io.sfence                  := Mux(htlb_enabled, exe_sfence, defaultInvalid)
+    when (htlb.io.req(w).valid) {
+      printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough)
+    }
+  }
+
+  val exe_htlb_miss  = widthMap(w => Mux(htlb_enabled, htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready), false.B))
+
+  val exe_tlb_vaddr = widthMap(w => Mux(htlb_enabled, htlb.io.resp(w).addr, exe_htlb_vaddr(w)))
+
+  val exe_passthr= widthMap(w =>
+                   Mux(will_fire_hella_incoming(w)  , hella_req.phys,
+                                                      false.B))
+
+  for (w <- 0 until memWidth) {
+    dtlb.io.req(w).valid            := exe_tlb_valid(w) && !exe_htlb_miss(w) && !htlb.io.resp(w).phys
     dtlb.io.req(w).bits.vaddr       := exe_tlb_vaddr(w)
     dtlb.io.req(w).bits.size        := exe_size(w)
     dtlb.io.req(w).bits.cmd         := exe_cmd(w)
     dtlb.io.req(w).bits.passthrough := exe_passthr(w)
     dtlb.io.req(w).bits.v           := io.ptw.status.v
     dtlb.io.req(w).bits.prv         := io.ptw.status.prv
+
+    when (dtlb.io.req(w).valid) {
+      printf("[LSU] -> [TLB] %x\n", dtlb.io.req(w).bits.vaddr)
+    }
   }
   dtlb.io.kill                      := exe_kill.reduce(_||_)
   dtlb.io.sfence                    := exe_sfence
@@ -706,13 +758,22 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     oldest_xcpt_rob_idx = Mux(is_older, mem_xcpt_uops(w).rob_idx, oldest_xcpt_rob_idx)
   }
 
-  val exe_tlb_miss  = widthMap(w => dtlb.io.req(w).valid && (dtlb.io.resp(w).miss || !dtlb.io.req(w).ready))
-  val exe_tlb_paddr = widthMap(w => Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits),
-                                        exe_tlb_vaddr(w)(corePgIdxBits-1,0)))
+  val exe_tlb_miss  = widthMap(w => Mux(htlb.io.resp(w).phys, false.B, exe_htlb_miss(w) || (dtlb.io.req(w).valid && (dtlb.io.resp(w).miss || !dtlb.io.req(w).ready))))
+  val exe_tlb_paddr = widthMap(w => Mux(htlb.io.resp(w).phys, htlb.io.resp(w).addr, Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits), exe_tlb_vaddr(w)(corePgIdxBits-1,0))))
   val exe_tlb_uncacheable = widthMap(w => !(dtlb.io.resp(w).cacheable))
+
+  val small_handle_criterium = widthMap(w => !exe_h_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).small)
 
   for (w <- 0 until memWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr || exe_req(w).bits.sfence.valid, "[lsu] paddrs should match.")
+
+    // debug for printing paddr for small handle optimization
+    // when (!exe_tlb_miss(w) && !exe_h_passthr(w)) {
+    //  printf("exe_tlb_paddr(%d): %x, htlb: %x: \n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr)
+    // }
+    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w) && !exe_passthr(w)
+    htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)
+    htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits)
 
     when (mem_xcpt_valids(w))
     {
@@ -837,7 +898,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     {
       val ldq_idx = Mux(will_fire_load_incoming(w), ldq_incoming_idx(w), ldq_retry_idx)
       ldq(ldq_idx).bits.addr.valid          := true.B
-      ldq(ldq_idx).bits.addr.bits           := Mux(exe_tlb_miss(w), exe_tlb_vaddr(w), exe_tlb_paddr(w))
+      ldq(ldq_idx).bits.addr.bits           := Mux(exe_htlb_miss(w), exe_htlb_vaddr(w), Mux(exe_tlb_miss(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)))
       ldq(ldq_idx).bits.uop.pdst            := exe_tlb_uop(w).pdst
       ldq(ldq_idx).bits.addr_is_virtual     := exe_tlb_miss(w)
       ldq(ldq_idx).bits.addr_is_uncacheable := exe_tlb_uncacheable(w) && !exe_tlb_miss(w)
@@ -852,7 +913,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         stq_incoming_idx(w), stq_retry_idx)
 
       stq(stq_idx).bits.addr.valid := !pf_st(w) // Prevent AMOs from executing!
-      stq(stq_idx).bits.addr.bits  := Mux(exe_tlb_miss(w), exe_tlb_vaddr(w), exe_tlb_paddr(w))
+      stq(stq_idx).bits.addr.bits  := Mux(exe_htlb_miss(w), exe_htlb_vaddr(w), Mux(exe_tlb_miss(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)))
       stq(stq_idx).bits.uop.pdst   := exe_tlb_uop(w).pdst // Needed for AMOs
       stq(stq_idx).bits.addr_is_virtual := exe_tlb_miss(w)
 

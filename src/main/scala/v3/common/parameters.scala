@@ -101,8 +101,9 @@ case class BoomCoreParams(
   /* debug stuff */
   enableCommitLogPrintf: Boolean = false,
   enableBranchPrintf: Boolean = false,
-  enableMemtracePrintf: Boolean = false
+  enableMemtracePrintf: Boolean = false,
 
+  enableHandleSupport: Int = 0
 // DOC include end: BOOM Parameters
 ) extends freechips.rocketchip.tile.CoreParams
 {
@@ -121,6 +122,7 @@ case class BoomCoreParams(
   val useConditionalZero = false
   override val useVector = false
   override def customCSRs(implicit p: Parameters) = new BoomCustomCSRs
+  override def customIsaExt = if (enableHandleSupport > 0) Some("handle") else None
 }
 
 class BoomTraceBundle extends Bundle {
@@ -148,6 +150,15 @@ class BoomCustomCSRs(implicit p: Parameters) extends freechips.rocketchip.tile.C
     )
     Some(CustomCSR(chickenCSRId, mask, Some(init)))
   }
+
+  override def htBaseCSR = {
+    Some(CustomCSR(htBaseCSRId,  (BigInt(1) << 64) - 1, Some(BigInt(0x00000000L))))
+  }
+
+  override def htDumpCSR = {
+    Some(CustomCSR(htDumpCSRId,  (BigInt(1) << 64) - 1, Some(BigInt(0x00000000L))))
+  }
+
   def disableOOO = getOrElse(chickenCSR, _.value(3), true.B)
   def marchid = CustomCSR.constant(CSRs.marchid, BigInt(2))
   override def decls: Seq[CustomCSR] = super.decls :+ marchid
@@ -302,4 +313,6 @@ trait HasBoomCoreParameters extends freechips.rocketchip.tile.HasCoreParameters
 
   val corePAddrBits = paddrBits
   val corePgIdxBits = pgIdxBits
+
+  val ENABLE_HTLB = boomParams.enableHandleSupport
 }

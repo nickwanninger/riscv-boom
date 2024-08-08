@@ -107,7 +107,7 @@ class FuncUnitResp(val dataWidth: Int)(implicit p: Parameters) extends BoomBundl
   val predicated = Bool() // Was this response from a predicated-off instruction
   val data = UInt(dataWidth.W)
   val fflags = new ValidIO(new FFlagsResp)
-  val addr = UInt((vaddrBits+1).W) // only for maddr -> LSU
+  val addr = UInt((xLen).W) // only for maddr -> LSU
   val mxcpt = new ValidIO(UInt((freechips.rocketchip.rocket.Causes.all.max+2).W)) //only for maddr->LSU
   val sfence = Valid(new freechips.rocketchip.rocket.SFenceReq) // only for mcalc
 }
@@ -490,10 +490,11 @@ class MemAddrCalcUnit(implicit p: Parameters)
   with freechips.rocketchip.rocket.constants.ScalarOpConstants
 {
   // perform address calculation
-  val sum = (io.req.bits.rs1_data.asSInt + io.req.bits.uop.imm_packed(19,8).asSInt).asUInt
-  val ea_sign = Mux(sum(vaddrBits-1), ~sum(63,vaddrBits) === 0.U,
-                                       sum(63,vaddrBits) =/= 0.U)
-  val effective_address = Cat(ea_sign, sum(vaddrBits-1,0)).asUInt
+  // val sum = (io.req.bits.rs1_data.asSInt + io.req.bits.uop.imm_packed(19,8).asSInt).asUInt
+  // val ea_sign = Mux(sum(vaddrBits-1), ~sum(63,vaddrBits) === 0.U,
+  //                                      sum(63,vaddrBits) =/= 0.U)
+  // val effective_address = Cat(ea_sign, sum(vaddrBits-1,0)).asUInt
+  val effective_address = (io.req.bits.rs1_data.asSInt + io.req.bits.uop.imm_packed(19,8).asSInt).asUInt
 
   val store_data = io.req.bits.rs2_data
 
