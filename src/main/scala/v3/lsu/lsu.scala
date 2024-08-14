@@ -663,8 +663,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   //--------------------------------------------
   // HTLB Access
 
-  // val exe_h_passthr = widthMap(w => !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)))
-  val exe_h_passthr = widthMap(w => Mux(htlb_enabled, !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)), true.B))
+  val exe_htlb_passthr = widthMap(w => Mux(htlb_enabled, 
+                                          Mux(will_fire_hella_incoming(w), true.B, !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2))), true.B))
 
   // Create a default invalid IOBundle
   val defaultInvalid = Wire(Valid(new rocket.SFenceReq))
@@ -677,7 +677,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
     htlb.io.req(w).valid            := exe_htlb_valid(w)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
-    htlb.io.req(w).bits.passthrough := exe_h_passthr(w)
+    htlb.io.req(w).bits.passthrough := exe_htlb_passthr(w)
     htlb.io.sfence                  := Mux(htlb_enabled, exe_sfence, defaultInvalid)
     when (htlb.io.req(w).valid) {
       printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough)
@@ -762,13 +762,13 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val exe_tlb_paddr = widthMap(w => Mux(htlb.io.resp(w).phys, htlb.io.resp(w).addr, Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits), exe_tlb_vaddr(w)(corePgIdxBits-1,0))))
   val exe_tlb_uncacheable = widthMap(w => !(dtlb.io.resp(w).cacheable))
 
-  val small_handle_criterium = widthMap(w => !exe_h_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).small)
+  val small_handle_criterium = widthMap(w => !exe_htlb_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).small)
 
   for (w <- 0 until memWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr || exe_req(w).bits.sfence.valid, "[lsu] paddrs should match.")
 
     // debug for printing paddr for small handle optimization
-    // when (!exe_tlb_miss(w) && !exe_h_passthr(w)) {
+    // when (!exe_tlb_miss(w) && !exe_htlb_passthr(w)) {
     //  printf("exe_tlb_paddr(%d): %x, htlb: %x: \n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr)
     // }
     htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w) && !exe_passthr(w)
