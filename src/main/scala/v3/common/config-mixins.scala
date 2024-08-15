@@ -356,8 +356,8 @@ class WithNMegaYukons(n: Int = 1) extends Config(
               ftq = FtqParameters(nEntries=40),
               nPerfCounters = 8,
               fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
-              nL2TLBWays=16,
-              nL2TLBEntries=2048,
+              // nL2TLBWays=16,
+              // nL2TLBEntries=2048,
             ),
             dcache = Some(
               DCacheParams(rowBits = 128, nSets=64, nWays=8, nMSHRs=8, nTLBWays=6, nTLBSets=16)
