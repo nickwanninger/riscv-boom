@@ -41,7 +41,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val resp = Vec(memWidth, new HTLBResp)
     val htw = new HTLBHTWIO
     val tlb = Flipped(Vec(memWidth, Valid(new TLBResp)))
-    val sfence = Input(Valid(new SFenceReq))
     val mem = new HellaCacheIO
     val htDump = Input(UInt(xLen.W))
   })
@@ -189,7 +188,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
   }
 
-  val sfence = io.sfence.valid
   for (w <- 0 until memWidth) {
     when(
       io.req(w).fire && htlb_miss(w) && state === s_ready && !io
@@ -230,23 +228,13 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   }
 
   when(state === s_request) {
-    when(sfence) { next_state := s_ready }
     when(io.htw.req.ready) {
-      next_state := Mux(sfence, s_wait_invalidate, s_wait)
+      next_state := s_wait
     }
-  }
-
-  when(state === s_wait && sfence) {
-    next_state := s_wait_invalidate
   }
 
   when(io.htw.resp.valid) {
     next_state := s_ready
-  }
-
-  when(sfence) {
-    printf("[HTLB] Invalidating all entries\n")
-    entries.foreach(_.invalidate())
   }
 
   // Send request to L2 HTLB if miss
@@ -273,7 +261,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val waddr = Mux(r_sectored_hit, r_sectored_hit_addr, r_sectored_repl_addr)
     for ((e, i) <- entries.zipWithIndex) when(waddr === i.U) {
       // make a copy of the victim entry, and set the victim flag to notify the L2 HTLB
-      next_state := Mux(e.valid && !sfence, s_victim_wait, s_ready)
+      next_state := Mux(e.valid, s_victim_wait, s_ready)
       victim_entry := e
       e.invalidate()
       e.insert(r_refill_tag, newEntry)

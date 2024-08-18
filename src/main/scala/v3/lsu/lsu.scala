@@ -263,9 +263,11 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.htw <> htlb.io.htw
   io.htlb_mem <> htlb.io.mem
   htlb.io.htDump <> io.core.htDump
+  val pending_htlb_uop = Reg(Valid(new MicroOp))
+  val pending_htlb_haddr = Reg(Valid(UInt(xLen.W)))
 
   // TODO: condition this on privilege level when we get to linux and running things not in S
-  val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase =/= 0.U && (io.core.status.prv + 1.U) <= ENABLE_HTLB.U
+  val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase =/= 0.U && (io.core.status.dprv + 1.U) <= ENABLE_HTLB.U
 
   val clear_store     = WireInit(false.B)
   val live_store_mask = RegInit(0.U(numStqEntries.W))
@@ -666,11 +668,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val exe_htlb_passthr = widthMap(w => Mux(htlb_enabled, 
                                           Mux(will_fire_hella_incoming(w), true.B, !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2))), true.B))
 
-  // Create a default invalid IOBundle
-  val defaultInvalid = Wire(Valid(new rocket.SFenceReq))
-  defaultInvalid.bits := DontCare
-  defaultInvalid.valid := false.B
-
   for (w <- 0 until memWidth) {
     // printf("will retry fire load: %d, store: %d (%x)\n", will_fire_load_retry(w), will_fire_store_retry(w), exe_htlb_vaddr(w))
     // printf("agen fire load: %d, store: %d (%x)\n", will_fire_load_agen(w), will_fire_store_agen(w), exe_htlb_vaddr(w))
@@ -678,10 +675,19 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.req(w).valid            := exe_htlb_valid(w)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_htlb_passthr(w)
-    htlb.io.sfence                  := Mux(htlb_enabled, exe_sfence, defaultInvalid)
     when (htlb.io.req(w).valid) {
-      printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough)
+      when (htlb_enabled) {
+        midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
+      }
+      pending_htlb_uop.valid := true.B
+      pending_htlb_uop.bits := exe_tlb_uop(w)
+      pending_htlb_haddr.valid := true.B
+      pending_htlb_haddr.bits := exe_htlb_vaddr(w)
     }
+  }
+
+  when (pending_htlb_haddr.valid && htlb_enabled) {
+    midas.targetutils.SynthesizePrintf(printf("[LSU] Pending HTLB: %x\n", pending_htlb_haddr.bits))
   }
 
   val exe_htlb_miss  = widthMap(w => Mux(htlb_enabled, htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready), false.B))
@@ -702,7 +708,16 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     dtlb.io.req(w).bits.prv         := io.ptw.status.prv
 
     when (dtlb.io.req(w).valid) {
-      printf("[LSU] -> [TLB] %x\n", dtlb.io.req(w).bits.vaddr)
+      when (htlb_enabled) {
+        midas.targetutils.SynthesizePrintf(printf("[LSU] -> [TLB] %x\n", dtlb.io.req(w).bits.vaddr))
+      }
+      pending_htlb_uop.valid := false.B
+      pending_htlb_uop.bits := NullMicroOp
+      pending_htlb_haddr.valid := false.B
+      pending_htlb_haddr.bits := 0.U
+      when (htlb_enabled) {
+        midas.targetutils.SynthesizePrintf(printf("[LSU] Released HTLB: %x\n", pending_htlb_haddr.bits))
+      }
     }
   }
   dtlb.io.kill                      := exe_kill.reduce(_||_)
@@ -715,6 +730,24 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val pf_st = widthMap(w => dtlb.io.req(w).valid && dtlb.io.resp(w).pf.st && exe_tlb_uop(w).uses_stq)
   val ae_ld = widthMap(w => dtlb.io.req(w).valid && dtlb.io.resp(w).ae.ld && exe_tlb_uop(w).uses_ldq)
   val ae_st = widthMap(w => dtlb.io.req(w).valid && dtlb.io.resp(w).ae.st && exe_tlb_uop(w).uses_stq)
+
+  val xcpt_exe_tlb_uop = widthMap(w => Mux(will_fire_load_incoming (w) ||
+                        will_fire_stad_incoming (w) ||
+                        will_fire_sta_incoming  (w) ||
+                        will_fire_sfence        (w)  , exe_req(w).bits.uop,
+                    Mux(will_fire_load_retry    (w)  , ldq_retry_e.bits.uop,
+                    Mux(will_fire_sta_retry     (w)  , stq_retry_e.bits.uop,
+                    Mux(will_fire_hella_incoming(w)  , Mux(pending_htlb_uop.valid, pending_htlb_uop.bits, NullMicroOp),
+                                                       NullMicroOp)))))
+
+  val xcpt_exe_tlb_vaddr = widthMap(w => Mux(htlb_enabled, htlb.io.resp(w).addr, Mux(will_fire_load_incoming (w) ||
+                        will_fire_stad_incoming (w) ||
+                        will_fire_sta_incoming  (w)  , exe_req(w).bits.addr,
+                    Mux(will_fire_sfence        (w)  , exe_req(w).bits.sfence.bits.addr,
+                    Mux(will_fire_load_retry    (w)  , ldq_retry_e.bits.addr.bits,
+                    Mux(will_fire_sta_retry     (w)  , stq_retry_e.bits.addr.bits,
+                    Mux(will_fire_hella_incoming(w)  , Mux(pending_htlb_haddr.valid, pending_htlb_haddr.bits, hella_req.addr),
+                                                       0.U)))))))
 
   // TODO check for xcpt_if and verify that never happens on non-speculative instructions.
   val mem_xcpt_valids = RegNext(widthMap(w =>
@@ -771,7 +804,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     // when (!exe_tlb_miss(w) && !exe_htlb_passthr(w)) {
     //  printf("exe_tlb_paddr(%d): %x, htlb: %x: \n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr)
     // }
-    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w) && !exe_passthr(w)
+    htlb.io.tlb(w).valid := false.B // !exe_tlb_miss(w) && small_handle_criterium(w) && !exe_passthr(w)
     htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)
     htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits)
 
