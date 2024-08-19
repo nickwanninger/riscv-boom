@@ -306,7 +306,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       io.dpath.htDumped := set_idx === nL2TLBSets.U && state === s_dumping
 
       when(io.requestor.l1_dumped && state === s_ready) {
-        printf("[HTW] Starting to dump L2\n")
+        midas.targetutils.SynthesizePrintf(printf("[HTW] Starting to dump L2\n"))
       }
 
       when (!io.dpath.customCSRs.htDump.orR && state === s_dumping) {
@@ -358,14 +358,14 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
         when(ds2_hit) {
           d_hid := Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx)
-          printf(
+          midas.targetutils.SynthesizePrintf(printf(
             "[HTW]  L2Entry: %d: %d, Valid(%d) %x - %x\n",
             set_idx, 
             way,
             dr_valid_vec(way),
             Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx),
             ds2_hte.addr
-          )
+          ))
           next_state := s_dumping_wait
         }
         // printf("Set: %d, Way: %d - Valid(%d), ds2(%d)\n", set_idx, way, dr_valid_vec(way), ds2_valid)
@@ -452,13 +452,13 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val tmp = mem_resp_data.asTypeOf(new HTE())
     val pte = WireDefault(tmp)
     when(mem_resp_valid && state === s_wait3) {
-      printf(
+      midas.targetutils.SynthesizePrintf(printf(
         "[HTW] Found HTE - Frozen: %x, Reserved: %x, Addr: %x, Small: %d\n",
         pte.frozen,
         pte.reserved,
         pte.addr,
         pte.small
-      )
+      ))
     }
 
     r_hte := OptimizationBarrier(
@@ -550,11 +550,11 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     // printf("d_hte_vaddr: %x, htDump: %x, dumped_htlb_idx: %d\n", d_hte_vaddr, io.dpath.customCSRs.htDump, 64.U + dumped_htlb_idx*8.U)
 
     when (state === s_dumping_wait) {
-      printf("[HTW] Dumping hid %x to %x (mem_resp_valid: %d)\n", d_hid, d_hte_vaddr, mem_resp_valid)
+      midas.targetutils.SynthesizePrintf(printf("[HTW] Dumping hid %x to %x (mem_resp_valid: %d)\n", d_hid, d_hte_vaddr, mem_resp_valid))
     }
 
     when (state === s_dumping_wait && mem_resp_valid) {
-      printf("[HTW] Finished dumping %d-th hid %x\n", dumped_htlb_idx, d_hid)
+      midas.targetutils.SynthesizePrintf(printf("[HTW] Finished dumping %d-th hid %x\n", dumped_htlb_idx, d_hid))
       dumped_htlb_idx := dumped_htlb_idx + 1.U
       next_state := s_dumping
     }

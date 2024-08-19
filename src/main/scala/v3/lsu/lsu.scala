@@ -715,7 +715,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       pending_htlb_uop.bits := NullMicroOp
       pending_htlb_haddr.valid := false.B
       pending_htlb_haddr.bits := 0.U
-      when (htlb_enabled) {
+      when (htlb_enabled && pending_htlb_haddr.valid) {
         midas.targetutils.SynthesizePrintf(printf("[LSU] Released HTLB: %x\n", pending_htlb_haddr.bits))
       }
     }
@@ -799,6 +799,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   for (w <- 0 until memWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr || exe_req(w).bits.sfence.valid, "[lsu] paddrs should match.")
+
+    when(!dtlb.io.resp(w).miss && htlb_enabled) {
+      midas.targetutils.SynthesizePrintf(printf("[TLB] -> [LSU] %x %x\n", dtlb.io.req(w).bits.vaddr, dtlb.io.resp(w).paddr))
+    }
 
     // debug for printing paddr for small handle optimization
     // when (!exe_tlb_miss(w) && !exe_htlb_passthr(w)) {
