@@ -639,6 +639,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     }
   }
 
+  htlb.io.sfence                    := exe_sfence
+
   val exe_size   = widthMap(w =>
                    Mux(will_fire_load_incoming (w) ||
                        will_fire_stad_incoming (w) ||
