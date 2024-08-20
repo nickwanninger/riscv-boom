@@ -306,6 +306,12 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val way_idx = RegInit(0.U((log2Ceil(coreParams.nL2TLBWays) + 1).W))
       io.dpath.htDumped := set_idx === nL2TLBSets.U && state === s_dumping
 
+      when (io.dpath.htDumped) {
+        midas.targetutils.SynthesizePrintf(printf("[HTW] Finished dumping\n"))
+        set_idx := 0.U
+        way_idx := 0.U
+      }
+
       when(io.requestor.l1_dumped && state === s_ready) {
         midas.targetutils.SynthesizePrintf(printf("[HTW] Starting to dump L2\n"))
       }
