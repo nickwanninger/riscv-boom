@@ -63,6 +63,7 @@ class HTWPerfEvents(implicit p: Parameters) extends BoomBundle()(p) {
 }
 
 class DatapathHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
+  val sfence = Flipped(Valid(new SFenceReq))
   val perf = Output(new HTWPerfEvents())
   val customCSRs = Flipped(coreParams.customCSRs)
   val htDumped = Output(Bool())
@@ -91,7 +92,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
   io.dpath.customCSRs := DontCare
 
   val clock_en =
-    state =/= s_ready || l2_refill_wire || io.requestor.req.valid || io.dpath.customCSRs.disableDCacheClockGate
+    state =/= s_ready || l2_refill_wire || io.requestor.req.valid || io.dpath.customCSRs.disableDCacheClockGate || io.dpath.sfence.valid
   io.dpath.clock_enabled := usingVM.B && clock_en
   val gated_clock =
     if (!usingVM || !tileParams.dcache.get.clockGate) clock
@@ -107,7 +108,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val v_hte = Reg(new HTE)
     val v_hid = Reg(UInt(handleBits.W))
 
-    invalidated := (invalidated && state =/= s_ready)
+    invalidated := (invalidated && state =/= s_ready) || io.dpath.sfence.valid
 
     /* debug print for handle table walks */
     when(io.mem.req.valid && state =/= s_dumping_wait) {
@@ -236,12 +237,12 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           }
         }
       }
-      // when(io.dpath.sfence.valid) {
-      //   printf("[HTW] Invalidating all entries\n")
-      //   for (way <- 0 until coreParams.nL2TLBWays) {
-      //     valid(way) := 0.U
-      //   }
-      // }
+      when(io.dpath.sfence.valid) {
+        printf("[HTW] Invalidating all entries\n")
+        for (way <- 0 until coreParams.nL2TLBWays) {
+          valid(way) := 0.U
+        }
+      }
 
       val s0_valid = !l2_refill
       val s1_valid = RegNext(s0_valid && io.requestor.req.valid)
