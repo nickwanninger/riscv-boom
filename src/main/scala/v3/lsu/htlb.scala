@@ -91,8 +91,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   // State Machine
   val s_ready :: s_request :: s_wait :: s_wait_invalidate :: s_victim_wait :: s_ht_dump :: s_ht_dump_wait :: s_ht_dumped :: Nil = Enum(8)
   val state = RegInit(s_ready)
-  val next_state = WireDefault(state)
-  state := OptimizationBarrier(next_state)
+  // val next_state = WireDefault(state)
+  // state := OptimizationBarrier(ext_state)
 
   // Refill State
   val do_refill = io.htw.resp.valid
@@ -195,7 +195,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         .bits
         .passthrough
     ) {
-      next_state := s_request
+      state := s_request
       r_refill_tag := hid(w)
 
       r_sectored_repl_addr := replacementEntry(entries, plru.way)
@@ -229,12 +229,12 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   when(state === s_request) {
     when(io.htw.req.ready) {
-      next_state := s_wait
+      state := s_wait
     }
   }
 
   when(io.htw.resp.valid) {
-    next_state := s_ready
+    state := s_ready
   }
 
   // Send request to L2 HTLB if miss
@@ -261,7 +261,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val waddr = Mux(r_sectored_hit, r_sectored_hit_addr, r_sectored_repl_addr)
     for ((e, i) <- entries.zipWithIndex) when(waddr === i.U) {
       // make a copy of the victim entry, and set the victim flag to notify the L2 HTLB
-      next_state := Mux(e.valid, s_victim_wait, s_ready)
+      state := Mux(e.valid, s_victim_wait, s_ready)
       victim_entry := e
       e.invalidate()
       e.insert(r_refill_tag, newEntry)
@@ -274,7 +274,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   }
 
   when(state === s_victim_wait && io.htw.evict_resp) {
-    next_state := s_ready
+    state := s_ready
   }
 
   when(reset.asBool) {
@@ -319,16 +319,16 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     midas.targetutils.SynthesizePrintf(printf("[HTLB] Starting to dump L1\n"))
     entry_idx := 0.U
     dumped_entry_idx := 0.U
-    next_state := s_ht_dump
+    state := s_ht_dump
   }
 
   when (state === s_ht_dump && entry_idx === entries.size.U) {
     midas.targetutils.SynthesizePrintf(printf("[HTLB] Done dumping!!!\n"))
-    next_state := s_ht_dumped
+    state := s_ht_dumped
   }
   
   when (state === s_ht_dumped && !io.htDump.orR) {
-    next_state := s_ready
+    state := s_ready
   }
 
   val d_hid = RegInit(0.U(handleBits.W))
@@ -350,7 +350,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         entry.immovable
       ))
       d_hid := entries(way).tag
-      next_state := s_ht_dump_wait
+      state := s_ht_dump_wait
     }
     plru.access(way)
   }
@@ -373,7 +373,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   when (state === s_ht_dump_wait && mem_resp_valid) {
     midas.targetutils.SynthesizePrintf(printf("[HTLB] Dumped %d-th L1 Entry %d\n", dumped_entry_idx, d_hid))
     dumped_entry_idx := dumped_entry_idx + 1.U
-    next_state := s_ht_dump
+    state := s_ht_dump
   }
 
   io.mem.req.valid := state === s_ht_dump_wait && !mem_resp_valid
