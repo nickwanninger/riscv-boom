@@ -292,7 +292,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   // TODO: fix possible consistency violation or worse if user tries to set csr while dump hasn't finished
   csr.io.customCSRs(2).set := io.htw.htDumped
   csr.io.customCSRs(2).sdata := 0.U
-  csr.io.clear_mie := Mux(csr.io.customCSRs(2).value.orR, io.htw.htDumped.orR, false.B)
+  csr.io.clear_mie := Mux(csr.io.customCSRs(2).value.orR, ~io.htw.htDumped.orR, false.B)
 
   //val icache_blocked = !(io.ifu.fetchpacket.valid || RegNext(io.ifu.fetchpacket.valid))
   val icache_blocked = false.B
