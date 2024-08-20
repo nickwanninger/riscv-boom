@@ -286,7 +286,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.htw.customCSRs <> custom_csrs
 
   when (io.htw.htDumped) {
-    printf("trying to end dumping ... %x\n", ~(io.htw.htDumped.asUInt))
+    midas.targetutils.SynthesizePrintf(printf("[Core] HTLB Dumping Completed, interrupts should be re-enabled\n"))
   }
 
   // TODO: fix possible consistency violation or worse if user tries to set csr while dump hasn't finished
