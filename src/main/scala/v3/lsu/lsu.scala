@@ -679,9 +679,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       when (htlb_enabled) {
         midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
       }
-      pending_htlb_uop.valid := true.B
+      pending_htlb_uop.valid := !htlb.io.req(w).bits.passthrough
       pending_htlb_uop.bits := exe_tlb_uop(w)
-      pending_htlb_haddr.valid := true.B
+      pending_htlb_haddr.valid := !htlb.io.req(w).bits.passthrough
       pending_htlb_haddr.bits := exe_htlb_vaddr(w)
     }
   }
