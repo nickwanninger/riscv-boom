@@ -308,8 +308,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
       when (io.dpath.htDumped) {
         midas.targetutils.SynthesizePrintf(printf("[HTW] Finished dumping\n"))
-        set_idx := 0.U
-        way_idx := 0.U
+        dumped_htlb_idx := 0.U
       }
 
       when(io.requestor.l1_dumped && state === s_ready) {
@@ -317,7 +316,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
 
       when (!io.dpath.customCSRs.htDump.orR && state === s_dumping) {
+        set_idx := 0.U
+        way_idx := 0.U
         next_state := s_ready
+        printf("[HTW] Finished dumping all entries\n")
       }
 
       // printf("Valid: %x\n", valid(0)(64,0).asUInt)
@@ -386,12 +388,17 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val set_idx_update = way_idx === coreParams.nL2TLBWays.U && (state === s_dumping)
       // Logic for updating way_idx
       val way_idx_update = ((state === s_dumping && !ds2_hit && pipeline_stage === 2.U) || (state === s_dumping_wait && mem_resp_valid)) && !set_idx_update
+
+      val way_clear = (set_idx_update || (state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U)) || (!io.dpath.customCSRs.htDump.orR && state === s_dumping)
+      val set_clear = !io.dpath.customCSRs.htDump.orR && state === s_dumping
+
       way_idx := Mux(way_idx_update, 
                       way_idx + 1.U,
-                      way_idx)
+                         Mux(way_clear, 0.U,
+                      way_idx))
 
       // Update pipeline stage
-      when (pipeline_stage === 2.U && RegNext(way_idx_update)) {
+      when ((pipeline_stage === 2.U && RegNext(way_idx_update)) || (set_clear && way_clear)) {
         pipeline_stage := 0.U
       } .elsewhen(state === s_dumping) {
         pipeline_stage := Mux(pipeline_stage === 2.U, 2.U, pipeline_stage + 1.U)
@@ -401,15 +408,13 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
                      set_idx + 1.U, 
                      Mux(state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U, 
                          d_hid(idxBits-1,0) + 1.U, 
-                         set_idx))
+                         Mux(set_clear, 0.U,
+                         set_idx)))
 
-      when (set_idx_update || (state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U)) {
-        way_idx := 0.U
-      }
-
-      // printf("SetIdx: %d, WayIdx: %d\n", set_idx, way_idx)
-      // printf("SetIdxUpdate: %d, WayIdxUpdate: %d\n", set_idx_update, way_idx_update)
-      // printf("Pipeline Stage: %d\n", pipeline_stage)
+      printf("SetIdx: %d, WayIdx: %d\n", set_idx, way_idx)
+      printf("SetIdxUpdate: %d, WayIdxUpdate: %d\n", set_idx_update, way_idx_update)
+      printf("Pipeline Stage: %d\n", pipeline_stage)
+      printf("WayClear: %d, SetClear: %d\n", way_clear, set_clear)
 
       // Reset pipeline stage when moving to a new set
       // when (way_idx_update) {
@@ -417,16 +422,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       // }
 
       // FIXME: this doesn't work for ways > 1
-
-      set_idx := Mux(set_idx_update, 
-                     set_idx + 1.U, 
-                     Mux(state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U, 
-                         d_hid(idxBits-1,0) + 1.U, 
-                         set_idx))
-
-      when (set_idx_update || (state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U)) {
-        way_idx := 0.U
-      }
 
       // printf("SetIdx: %d, WayIdx: %d\n", set_idx, way_idx)
       // printf("SetIdxUpdate: %d, WayIdxUpdate: %d\n", set_idx_update, way_idx_update)
