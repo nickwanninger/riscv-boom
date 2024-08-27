@@ -236,6 +236,9 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   when (state === s_wait && sfence) {
     state := s_wait_invalidate
   }
+  when (state === s_wait_invalidate) {
+    state := s_ready
+  }
   when(io.htw.resp.valid) {
     state := s_ready
   }
