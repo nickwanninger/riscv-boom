@@ -43,6 +43,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val tlb = Flipped(Vec(memWidth, Valid(new TLBResp)))
     val mem = new HellaCacheIO
     val htDump = Input(UInt(xLen.W))
+    val htInval = Input(UInt(handleBits.W))
     val sfence = Input(Valid(new SFenceReq))
   })
 
@@ -291,6 +292,22 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   when(reset.asBool) {
     entries.foreach(_.invalidate())
+  }
+
+  when (io.htInval.orR) {
+    when (io.htInval === ((BigInt(1) << handleBits) - 1).U) {
+      midas.targetutils.SynthesizePrintf(printf("[HTW] Invalidating all entries\n"))
+      for (e <- entries) {
+        e.invalidate()
+      }
+    }.otherwise {
+      midas.targetutils.SynthesizePrintf(printf("[HTLB] Invalidating %x\n", io.htInval))
+      for ((e, i) <- entries.zipWithIndex) {
+        when(io.htInval === e.tag) {
+          e.invalidate()
+        }
+      }
+    }
   }
 
   // for (w <- 0 until memWidth) {

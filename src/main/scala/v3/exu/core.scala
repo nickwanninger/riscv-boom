@@ -289,10 +289,17 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     midas.targetutils.SynthesizePrintf(printf("[Core] HTLB Dumping Completed, interrupts should be re-enabled\n"))
   }
 
+  when (io.htw.htInvald) {
+    midas.targetutils.SynthesizePrintf(printf("[Core] HTW Invalidation Completed\n"))
+  }
+
   // TODO: fix possible consistency violation or worse if user tries to set csr while dump hasn't finished
   csr.io.customCSRs(2).set := io.htw.htDumped
   csr.io.customCSRs(2).sdata := 0.U
   csr.io.clear_mie := Mux(csr.io.customCSRs(2).value.orR, ~io.htw.htDumped.orR, false.B)
+
+  csr.io.customCSRs(3).set := io.htw.htInvald
+  csr.io.customCSRs(3).sdata := 0.U
 
   //val icache_blocked = !(io.ifu.fetchpacket.valid || RegNext(io.ifu.fetchpacket.valid))
   val icache_blocked = false.B
@@ -1426,6 +1433,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   io.lsu.htBase := custom_csrs.htBase
   io.lsu.htDump := custom_csrs.htDump
+  io.lsu.htInval := custom_csrs.htInval
 
   val htlb_enabled = (ENABLE_HTLB > 0).B && custom_csrs.htBase =/= 0.U && (csr.io.status.dprv + 1.U) <= ENABLE_HTLB.U
 

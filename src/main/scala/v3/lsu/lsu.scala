@@ -157,6 +157,7 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
   val status = Input(new rocket.MStatus)
   val htBase = Input(UInt(xLen.W))
   val htDump = Input(UInt(xLen.W))
+  val htInval = Input(UInt(xLen.W))
 }
 
 class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
@@ -263,6 +264,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.htw <> htlb.io.htw
   io.htlb_mem <> htlb.io.mem
   htlb.io.htDump <> io.core.htDump
+  htlb.io.htInval <> io.core.htInval
   val pending_htlb_uop = Reg(Valid(new MicroOp))
   val pending_htlb_haddr = Reg(Valid(UInt(xLen.W)))
 
