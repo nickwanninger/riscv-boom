@@ -590,8 +590,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       resp_valid := true.B
     }
 
-    when (io.mem.s2_nack) {
-      assert(state === s_wait2 || state === s_dumping_wait)
+    when (io.mem.s2_nack && (state === s_wait2 || state === s_dumping_wait)) {
       next_state := Mux(state === s_wait2, s_req, s_dumping_wait)
     }
 
