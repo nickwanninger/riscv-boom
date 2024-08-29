@@ -173,7 +173,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     io.resp(w).addr := Mux(
       io.req(w).bits.passthrough,
       effective_address,
-      addr(w) + io.req(w).bits.haddr(handleBits - 1, 0)
+      addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0)
     )
     io.resp(w).phys := phys(w) && hm_enabled(w)
     io.resp(w).small := small(w)
@@ -184,7 +184,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         io.resp(w).addr,
         io.resp(w).phys,
         io.req(w).bits.haddr,
-        addr(w) + io.req(w).bits.haddr(handleBits - 1, 0)
+        addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0)
       )
     }
   }

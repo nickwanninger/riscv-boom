@@ -85,7 +85,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   // Utilities
   def widthMap[T <: Data](f: Int => T) = VecInit((0 until memWidth).map(f))
   val hm_enabled = widthMap(w => !io.req(w).bits.passthrough)
-  val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleBits))
+  val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleOffsetBits))
 
   // L1 TLB Entries
   val entries = Reg(Vec(cfg.nSets * cfg.nWays, new Entry()))
@@ -174,7 +174,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     io.resp(w).addr := Mux(
       io.req(w).bits.passthrough,
       effective_address,
-      addr(w) + io.req(w).bits.haddr(handleBits - 1, 0)
+      addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0)
     )
     io.resp(w).phys := phys(w) && hm_enabled(w)
     io.resp(w).small := small(w)
@@ -185,7 +185,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         io.resp(w).addr,
         io.resp(w).phys,
         io.req(w).bits.haddr,
-        addr(w) + io.req(w).bits.haddr(handleBits - 1, 0)
+        addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0)
       ))
     }
   }
@@ -349,6 +349,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     entry_idx := 0.U
     dumped_entry_idx := 0.U
     state := s_ht_dump
+    midas.targetutils.SynthesizePrintf(printf("[HTLB] Valid Vec: %x\n", VecInit(entries.map(_.valid)).asUInt))
   }
 
   when (state === s_ht_dump && entry_idx === entries.size.U) {
@@ -364,7 +365,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val hit = WireDefault(false.B)
   when (entry_idx < entries.size.U && state === s_ht_dump) {
     val way = plru.way
-    // printf("Entry idx: %d\n", entry_idx)
+    midas.targetutils.SynthesizePrintf(printf("[HTLB] Dumping, checking Entry idx: %d\n", entry_idx))
 
     hit := entries(way).valid
     when(hit) {
