@@ -265,8 +265,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.htlb_mem <> htlb.io.mem
   htlb.io.htDump <> io.core.htDump
   htlb.io.htInval <> io.core.htInval
-  val pending_htlb_uop = Reg(Valid(new MicroOp))
-  val pending_htlb_haddr = Reg(Valid(UInt(xLen.W)))
 
   // TODO: condition this on privilege level when we get to linux and running things not in S
   val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase =/= 0.U && (io.core.status.dprv + 1.U) <= ENABLE_HTLB.U
@@ -683,15 +681,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       when (htlb_enabled) {
         midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
       }
-      pending_htlb_uop.valid := !htlb.io.req(w).bits.passthrough
-      pending_htlb_uop.bits := exe_tlb_uop(w)
-      pending_htlb_haddr.valid := !htlb.io.req(w).bits.passthrough
-      pending_htlb_haddr.bits := exe_htlb_vaddr(w)
     }
-  }
-
-  when (pending_htlb_haddr.valid && htlb_enabled) {
-    midas.targetutils.SynthesizePrintf(printf("[LSU] Pending HTLB: %x\n", pending_htlb_haddr.bits))
   }
 
   val exe_htlb_miss  = widthMap(w => Mux(htlb_enabled, htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready), false.B))
@@ -715,13 +705,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       when (htlb_enabled) {
         midas.targetutils.SynthesizePrintf(printf("[LSU] -> [TLB] %x\n", dtlb.io.req(w).bits.vaddr))
       }
-      pending_htlb_uop.valid := false.B
-      pending_htlb_uop.bits := NullMicroOp
-      pending_htlb_haddr.valid := false.B
-      pending_htlb_haddr.bits := 0.U
-      when (htlb_enabled && pending_htlb_haddr.valid) {
-        midas.targetutils.SynthesizePrintf(printf("[LSU] Releasing HTLB: %x\n", pending_htlb_haddr.bits))
-      }
     }
   }
   dtlb.io.kill                      := exe_kill.reduce(_||_)
@@ -735,30 +718,12 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val ae_ld = widthMap(w => dtlb.io.req(w).valid && dtlb.io.resp(w).ae.ld && exe_tlb_uop(w).uses_ldq)
   val ae_st = widthMap(w => dtlb.io.req(w).valid && dtlb.io.resp(w).ae.st && exe_tlb_uop(w).uses_stq)
 
-  val xcpt_exe_tlb_uop = widthMap(w => Mux(will_fire_load_incoming (w) ||
-                        will_fire_stad_incoming (w) ||
-                        will_fire_sta_incoming  (w) ||
-                        will_fire_sfence        (w)  , exe_req(w).bits.uop,
-                    Mux(will_fire_load_retry    (w)  , ldq_retry_e.bits.uop,
-                    Mux(will_fire_sta_retry     (w)  , stq_retry_e.bits.uop,
-                    Mux(will_fire_hella_incoming(w)  , Mux(pending_htlb_uop.valid, pending_htlb_uop.bits, NullMicroOp),
-                                                       NullMicroOp)))))
-
-  val xcpt_exe_tlb_vaddr = widthMap(w => Mux(will_fire_load_incoming (w) ||
-                        will_fire_stad_incoming (w) ||
-                        will_fire_sta_incoming  (w)  , exe_req(w).bits.addr,
-                    Mux(will_fire_sfence        (w)  , exe_req(w).bits.sfence.bits.addr,
-                    Mux(will_fire_load_retry    (w)  , ldq_retry_e.bits.addr.bits,
-                    Mux(will_fire_sta_retry     (w)  , stq_retry_e.bits.addr.bits,
-                    Mux(will_fire_hella_incoming(w)  , Mux(pending_htlb_haddr.valid, pending_htlb_haddr.bits, hella_req.addr),
-                                                       0.U))))))
-
   // TODO check for xcpt_if and verify that never happens on non-speculative instructions.
   val mem_xcpt_valids = RegNext(widthMap(w =>
                      (pf_ld(w) || pf_st(w) || ae_ld(w) || ae_st(w) || ma_ld(w) || ma_st(w)) &&
                      !io.core.exception &&
                      !IsKilledByBranch(io.core.brupdate, exe_tlb_uop(w))))
-  val mem_xcpt_uops   = RegNext(widthMap(w => UpdateBrMask(io.core.brupdate, xcpt_exe_tlb_uop(w))))
+  val mem_xcpt_uops   = RegNext(widthMap(w => UpdateBrMask(io.core.brupdate, exe_tlb_uop(w))))
   val mem_xcpt_causes = RegNext(widthMap(w =>
     Mux(ma_ld(w), rocket.Causes.misaligned_load.U,
     Mux(ma_st(w), rocket.Causes.misaligned_store.U,
@@ -766,7 +731,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     Mux(pf_st(w), rocket.Causes.store_page_fault.U,
     Mux(ae_ld(w), rocket.Causes.load_access.U,
                   rocket.Causes.store_access.U)))))))
-  val mem_xcpt_vaddrs = RegNext(xcpt_exe_tlb_vaddr)
+  val mem_xcpt_vaddrs = RegNext(exe_tlb_vaddr)
 
   for (w <- 0 until memWidth) {
     assert (!(dtlb.io.req(w).valid && exe_tlb_uop(w).is_fence), "Fence is pretending to talk to the TLB")
