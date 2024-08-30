@@ -265,6 +265,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.htlb_mem <> htlb.io.mem
   htlb.io.htDump <> io.core.htDump
   htlb.io.htInval <> io.core.htInval
+  htlb.io.htBase <> io.core.htBase
 
   // TODO: condition this on privilege level when we get to linux and running things not in S
   val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase =/= 0.U && (io.core.status.dprv + 1.U) <= ENABLE_HTLB.U
@@ -677,6 +678,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.req(w).valid            := exe_htlb_valid(w)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_htlb_passthr(w)
+    htlb.io.kill                    := exe_kill.reduce(_||_)
     when (htlb.io.req(w).valid) {
       when (htlb_enabled) {
         midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))

@@ -85,12 +85,16 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   val l2_refill_wire = Wire(Bool())
-  state := OptimizationBarrier(next_state)
+  state := Mux(io.dpath.customCSRs.htBase =/= 0.U, OptimizationBarrier(next_state), s_ready)
 
   val resp_valid = RegNext(RegInit(false.B))
   val resp_ae_htw = Reg(Bool())
 
   io.dpath.customCSRs := DontCare
+
+  when(io.dpath.customCSRs.htBase === 0.U) {
+    state := s_ready
+  }
 
   val clock_en =
     state =/= s_ready || l2_refill_wire || io.requestor.req.valid || io.dpath.customCSRs.disableDCacheClockGate || io.dpath.sfence.valid
@@ -155,7 +159,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     }
 
     l2_refill := state === s_victim
-    io.requestor.evict.ready := state === s_ready
 
     val nL2TLBSets = coreParams.nL2TLBEntries / coreParams.nL2TLBWays
     val idxBits = log2Ceil(nL2TLBSets)
@@ -239,7 +242,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         }
       }
       when(io.dpath.sfence.valid) {
-        printf("[HTW] Invalidating all entries\n")
+        // printf("[HTW] Invalidating all entries\n")
         for (way <- 0 until coreParams.nL2TLBWays) {
           valid(way) := 0.U
         }
@@ -306,14 +309,14 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val set_idx = RegInit(0.U((idxBits + 1).W))
       val way_idx = RegInit(0.U((log2Ceil(coreParams.nL2TLBWays) + 1).W))
       io.dpath.htDumped := set_idx === nL2TLBSets.U && state === s_dumping
-      io.dpath.htInvald := state === s_invalidated
+      io.dpath.htInvald := state ===  s_invalidated
 
       when (io.dpath.htDumped) {
         midas.targetutils.SynthesizePrintf(printf("[HTW] Finished dumping\n"))
         dumped_htlb_idx := 0.U
       }
 
-      when(io.requestor.l1_dumped && state === s_ready) {
+      when(io.requestor.l1_dumped && state === s_ready && io.dpath.customCSRs.htDump.orR) {
         midas.targetutils.SynthesizePrintf(printf("[HTW] Starting to dump L2\n"))
       }
 
