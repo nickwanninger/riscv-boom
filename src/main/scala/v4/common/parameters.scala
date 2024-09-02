@@ -120,6 +120,11 @@ case class BoomCoreParams(
   enableBranchPrintf: Boolean = false,
   enableMemtracePrintf: Boolean = false,
 
+  nL1HTLBWays: Int = 1,
+  nL1HTLBEntries: Int = 8,
+  nL2HTLBWays: Int = 1,
+  nL2HTLBEntries: Int = 512,
+
   enableHandleSupport: Int = 0
 
 // DOC include end: BOOM Parameters

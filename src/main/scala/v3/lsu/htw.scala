@@ -160,57 +160,57 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     l2_refill := state === s_victim
 
-    val nL2TLBSets = coreParams.nL2TLBEntries / coreParams.nL2TLBWays
-    val idxBits = log2Ceil(nL2TLBSets)
-    val d_ways = RegInit(0.U(log2Ceil(coreParams.nL2TLBWays).W))
+    val nL2HTLBSets = coreParams.nL2HTLBEntries / coreParams.nL2HTLBWays
+    val idxBits = log2Ceil(nL2HTLBSets)
+    val d_ways = RegInit(0.U(log2Ceil(coreParams.nL2HTLBWays).W))
     val d_hid = RegInit(0.U(handleBits.W))
     val dumped_htlb_idx = RegInit(0.U(idxBits.W))
 
     val (l2_hit, l2_error, l2_hte, l2_htlb_ram) = {
       val code = new ParityCode
-      require(isPow2(coreParams.nL2TLBEntries))
-      require(isPow2(coreParams.nL2TLBWays))
-      require(coreParams.nL2TLBEntries >= coreParams.nL2TLBWays)
-      require(isPow2(nL2TLBSets))
+      require(isPow2(coreParams.nL2HTLBEntries))
+      require(isPow2(coreParams.nL2HTLBWays))
+      require(coreParams.nL2HTLBEntries >= coreParams.nL2HTLBWays)
+      require(isPow2(nL2HTLBSets))
 
-      val l2_plru = new SetAssocLRU(nL2TLBSets, coreParams.nL2TLBWays, "plru")
+      val l2_plru = new SetAssocLRU(nL2HTLBSets, coreParams.nL2HTLBWays, "plru")
 
       val ram = DescribedSRAM(
         name = "l2_htlb_ram",
         desc = "L2 HTLB",
-        size = nL2TLBSets,
+        size = nL2HTLBSets,
         data = Vec(
-          coreParams.nL2TLBWays,
-          UInt(code.width(new L2HTLBEntry(nL2TLBSets).getWidth).W)
+          coreParams.nL2HTLBWays,
+          UInt(code.width(new L2HTLBEntry(nL2HTLBSets).getWidth).W)
         )
       )
 
-      // val g = Reg(Vec(coreParams.nL2TLBWays, UInt(nL2TLBSets.W)))
+      // val g = Reg(Vec(coreParams.nL2HTLBWays, UInt(nL2HTLBSets.W)))
       val valid = RegInit(
-        VecInit(Seq.fill(coreParams.nL2TLBWays)(0.U(nL2TLBSets.W)))
+        VecInit(Seq.fill(coreParams.nL2HTLBWays)(0.U(nL2HTLBSets.W)))
       )
       // use r_req to construct tag
       val (r_tag, r_idx) = Split(io.requestor.req.bits.bits.hid, idxBits)
 
       /** the valid vec for the selected set(including n ways) */
       val r_valid_vec = valid.map(_(r_idx)).asUInt
-      val r_valid_vec_q = Reg(UInt(coreParams.nL2TLBWays.W))
+      val r_valid_vec_q = Reg(UInt(coreParams.nL2HTLBWays.W))
       r_valid_vec_q := r_valid_vec
       // refill with r_pte(leaf pte)
       when(l2_refill && !invalidated) {
         val (v_tag, v_idx) = Split(v_hid, idxBits)
 
         val v_valid_vec = valid.map(_(v_idx)).asUInt
-        val v_valid_vec_q = Reg(UInt(coreParams.nL2TLBWays.W))
+        val v_valid_vec_q = Reg(UInt(coreParams.nL2HTLBWays.W))
         
         // replacement way
-        val v_l2_plru_way = Reg(UInt(log2Ceil(coreParams.nL2TLBWays max 1).W))
+        val v_l2_plru_way = Reg(UInt(log2Ceil(coreParams.nL2HTLBWays max 1).W))
         v_valid_vec_q := v_valid_vec
         // replacement way
-        v_l2_plru_way := (if (coreParams.nL2TLBWays > 1) l2_plru.way(v_idx)
+        v_l2_plru_way := (if (coreParams.nL2HTLBWays > 1) l2_plru.way(v_idx)
                           else 0.U)
 
-        val entry = Wire(new L2HTLBEntry(nL2TLBSets))
+        val entry = Wire(new L2HTLBEntry(nL2HTLBSets))
         entry.small := v_hte.small
         entry.frozen := v_hte.frozen
         entry.addr := v_hte.addr
@@ -218,23 +218,23 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         // if all the way are valid, use plru to select one way to be replaced,
         // otherwise use PriorityEncoderOH to select one
         val wmask =
-          if (coreParams.nL2TLBWays > 1)
+          if (coreParams.nL2HTLBWays > 1)
             Mux(
               v_valid_vec_q.andR,
-              UIntToOH(v_l2_plru_way, coreParams.nL2TLBWays),
+              UIntToOH(v_l2_plru_way, coreParams.nL2HTLBWays),
               PriorityEncoderOH(~v_valid_vec_q)
             )
           else 1.U(1.W)
         ram.write(
           v_idx,
-          VecInit(Seq.fill(coreParams.nL2TLBWays)(code.encode(entry.asUInt))),
+          VecInit(Seq.fill(coreParams.nL2HTLBWays)(code.encode(entry.asUInt))),
           wmask.asBools
         )
         printf("[HTW] Inserting with addr: %x into set %d, way %d (tag)\n", entry.addr, v_idx, v_tag)
 
         val mask = UIntToOH(v_idx)
         // printf("Mask: %x\n", mask)
-        for (way <- 0 until coreParams.nL2TLBWays) {
+        for (way <- 0 until coreParams.nL2HTLBWays) {
           when(wmask(way)) {
             valid(way) := valid(way) | mask
             //   g(way) := Mux(r_pte.g, g(way) | mask, g(way) & ~mask)
@@ -243,7 +243,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
       when(io.dpath.sfence.valid) {
         // printf("[HTW] Invalidating all entries\n")
-        for (way <- 0 until coreParams.nL2TLBWays) {
+        for (way <- 0 until coreParams.nL2HTLBWays) {
           valid(way) := 0.U
         }
       }
@@ -257,15 +257,15 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         s1_rdata.map(s1_rdway => code.decode(RegEnable(s1_rdway, s1_valid)))
       val s2_valid_vec = RegEnable(r_valid_vec, s1_valid)
       // val s2_g_vec = RegEnable(VecInit(g.map(_(r_idx))), s1_valid)
-      val s2_error = (0 until coreParams.nL2TLBWays)
+      val s2_error = (0 until coreParams.nL2HTLBWays)
         .map(way => s2_valid_vec(way) && s2_rdata(way).error)
         .orR
       when(s2_valid && s2_error) { valid.foreach { _ := 0.U } }
       // printf("s2_valid: %d, s2_error: %d\n", s2_valid, s2_error)
       // decode
       val s2_entry_vec =
-        s2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2TLBSets)))
-      val s2_hit_vec = (0 until coreParams.nL2TLBWays).map(way =>
+        s2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2HTLBSets)))
+      val s2_hit_vec = (0 until coreParams.nL2HTLBWays).map(way =>
         s2_valid_vec(way) && (r_tag === s2_entry_vec(way).tag)
       )
       // printf("r_idx: %x, r_tag: %x, entry-vec-addr: %x\n", r_idx, r_tag, s2_entry_vec(0).addr)
@@ -278,7 +278,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         // l2_plru.access(r_idx, OHToUInt(s2_hit_vec))
         val invl_mask = UIntToOH(r_idx)
         // printf("Invl Mask: %x\n", invl_mask)
-        for (way <- 0 until coreParams.nL2TLBWays) {
+        for (way <- 0 until coreParams.nL2HTLBWays) {
             valid(way) := valid(way) & ~invl_mask
             //   g(way) := Mux(r_pte.g, g(way) | mask, g(way) & ~mask)
         }
@@ -294,7 +294,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       s2_hte.reserved := 0.U
       s2_hte.small := s2_hit_entry.small
 
-      for (way <- 0 until coreParams.nL2TLBWays) {
+      for (way <- 0 until coreParams.nL2HTLBWays) {
         ccover(
           s2_hit && s2_hit_vec(way),
           s"L2_HTLB_HIT_WAY$way",
@@ -307,8 +307,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
 
       val set_idx = RegInit(0.U((idxBits + 1).W))
-      val way_idx = RegInit(0.U((log2Ceil(coreParams.nL2TLBWays) + 1).W))
-      io.dpath.htDumped := set_idx === nL2TLBSets.U && state === s_dumping
+      val way_idx = RegInit(0.U((log2Ceil(coreParams.nL2HTLBWays) + 1).W))
+      io.dpath.htDumped := set_idx === nL2HTLBSets.U && state === s_dumping
       io.dpath.htInvald := state ===  s_invalidated
 
       when (io.dpath.htDumped) {
@@ -332,7 +332,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val pipeline_stage = RegInit(0.U(2.W))
 
       // val dr_valid_vec = ShiftRegister(valid.map(_(set_idx)).asUInt, 2)
-      val dr_valid_vec = valid.map(_(set_idx)).asUInt
+      val dr_valid_vec = valid.map(_(set_idx(idxBits,0))).asUInt
       val ds0_valid = state === s_dumping && pipeline_stage === 0.U
       val ds1_valid = RegNext(ds0_valid)
       val ds2_valid = RegNext(ds1_valid) && pipeline_stage === 2.U
@@ -340,28 +340,28 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val ds1_rdata = ram.read(set_idx, ds0_valid)
       val ds2_rdata =
         ds1_rdata.map(ds1_rdway => code.decode(RegEnable(ds1_rdway, ds1_valid)))
-      val ds2_error = (0 until coreParams.nL2TLBWays)
+      val ds2_error = (0 until coreParams.nL2HTLBWays)
         .map(way => dr_valid_vec(way) && ds2_rdata(way).error)
         .orR
       when(ds2_valid && ds2_error) { valid.foreach { _ := 0.U } }
       // printf("ds2_valid: %d, ds2_error: %d\n", ds2_valid, ds2_error)
       // decode
       val ds2_entry_vec =
-        ds2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2TLBSets)))
+        ds2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2HTLBSets)))
 
       // TODO: reading old ds2_entry_vec, before new one comes in.
       // it is there for 3 cycles before the real one comes in. do we not restart the reading clock?
       // printf("ds2_entry_vec: %x\n", ds2_entry_vec(0).addr)
 
-      val ds2_hit_vec = (0 until coreParams.nL2TLBWays).map(way =>
+      val ds2_hit_vec = (0 until coreParams.nL2HTLBWays).map(way =>
         dr_valid_vec(way)
       )
 
       val ds2_hit = ds2_valid && ds2_hit_vec.orR && !ds2_error
       // val ds2_hit = ds2_valid && ds2_hit_vec.orR && !ds2_error
 
-      val ds2_hte = Wire(new L2HTLBEntry(nL2TLBSets))
-      when (state === s_dumping && way_idx < coreParams.nL2TLBWays.U && set_idx < nL2TLBSets.U) {
+      val ds2_hte = Wire(new L2HTLBEntry(nL2HTLBSets))
+      when (state === s_dumping && way_idx < coreParams.nL2HTLBWays.U && set_idx < nL2HTLBSets.U) {
         val way = l2_plru.way(set_idx)
 
         val ds2_hit_entry = Mux1H(UIntToOH(way), ds2_entry_vec)
@@ -390,11 +390,11 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
 
       // Updated logic for set_idx
-      val set_idx_update = way_idx === coreParams.nL2TLBWays.U && (state === s_dumping)
+      val set_idx_update = way_idx === coreParams.nL2HTLBWays.U && (state === s_dumping)
       // Logic for updating way_idx
       val way_idx_update = ((state === s_dumping && !ds2_hit && pipeline_stage === 2.U) || (state === s_dumping_wait && mem_resp_valid)) && !set_idx_update
 
-      val way_clear = (set_idx_update || (state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U)) || (!io.dpath.customCSRs.htDump.orR && state === s_dumping)
+      val way_clear = (set_idx_update || (state === s_dumping_wait && way_idx === coreParams.nL2HTLBWays.U)) || (!io.dpath.customCSRs.htDump.orR && state === s_dumping)
       val set_clear = !io.dpath.customCSRs.htDump.orR && state === s_dumping
 
       way_idx := Mux(way_idx_update, 
@@ -411,7 +411,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
       set_idx := Mux(set_idx_update, 
                      set_idx + 1.U, 
-                     Mux(state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U, 
+                     Mux(state === s_dumping_wait && way_idx === coreParams.nL2HTLBWays.U, 
                          d_hid(idxBits-1,0) + 1.U, 
                          Mux(set_clear, 0.U,
                          set_idx)))
@@ -440,21 +440,21 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       // FIXME: this doesn't work for ways > 1
       // way_idx := Mux(((state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid)) && ds2_valid, way_idx + 1.U, way_idx)
 
-      // when (way_idx === coreParams.nL2TLBWays.U && ((state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid)) && ds2_valid) {
+      // when (way_idx === coreParams.nL2HTLBWays.U && ((state === s_dumping && !ds2_hit) || (state === s_dumping_wait && mem_resp_valid)) && ds2_valid) {
       //   way_idx := 0.U
       // }
 
-      // set_idx := Mux(way_idx === coreParams.nL2TLBWays.U && (state === s_dumping && !ds2_hit), set_idx + 1.U, Mux(state === s_dumping_wait && mem_resp_valid, d_hid(idxBits-1,0) + 1.U, set_idx))
+      // set_idx := Mux(way_idx === coreParams.nL2HTLBWays.U && (state === s_dumping && !ds2_hit), set_idx + 1.U, Mux(state === s_dumping_wait && mem_resp_valid, d_hid(idxBits-1,0) + 1.U, set_idx))
 
       // TODO: double check this exit condition?
-      // when (set_idx === nL2TLBSets.U && state === s_dumping) {
+      // when (set_idx === nL2HTLBSets.U && state === s_dumping) {
       //   next_state := s_ready
       // }
 
       when (state === s_invalidating) {
         when (io.dpath.customCSRs.htInval === ((BigInt(1) << handleBits) - 1).U) {
           midas.targetutils.SynthesizePrintf(printf("[HTW] Invalidating all entries\n"))
-          for (way <- 0 until coreParams.nL2TLBWays) {
+          for (way <- 0 until coreParams.nL2HTLBWays) {
             valid(way) := 0.U
           }
           next_state := s_invalidated
@@ -472,15 +472,15 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
             i1_rdata.map(i1_rdway => code.decode(RegEnable(i1_rdway, i1_valid)))
           val i2_valid_vec = RegEnable(i_valid_vec, i1_valid)
           // val i2_g_vec = RegEnable(VecInit(g.map(_(r_idx))), i1_valid)
-          val i2_error = (0 until coreParams.nL2TLBWays)
+          val i2_error = (0 until coreParams.nL2HTLBWays)
             .map(way => i2_valid_vec(way) && i2_rdata(way).error)
             .orR
           when(i2_valid && i2_error) { valid.foreach { _ := 0.U } }
           // printf("i2_valid: %d, i2_error: %d\n", i2_valid, i2_error)
           // decode
           val i2_entry_vec =
-            i2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2TLBSets)))
-          val i2_hit_vec = (0 until coreParams.nL2TLBWays).map(way =>
+            i2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2HTLBSets)))
+          val i2_hit_vec = (0 until coreParams.nL2HTLBWays).map(way =>
             i2_valid_vec(way) && (i_tag === i2_entry_vec(way).tag)
           )
           // printf("r_idx: %x, r_tag: %x, entry-vec-addr: %x\n", r_idx, r_tag, i2_entry_vec(0).addr)
@@ -489,7 +489,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           when(i2_hit) {
             val invl_mask = UIntToOH(i_idx)
             // printf("Invl Mask: %x\n", invl_mask)
-            for (way <- 0 until coreParams.nL2TLBWays) {
+            for (way <- 0 until coreParams.nL2HTLBWays) {
                 valid(way) := valid(way) & ~invl_mask
                 //   g(way) := Mux(r_pte.g, g(way) | mask, g(way) & ~mask)
             }

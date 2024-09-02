@@ -260,7 +260,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.perf.acquire := io.dmem.perf.acquire
   io.core.perf.release := io.dmem.perf.release
 
-  val htlb = Module(new HTLB(rocket.TLBConfig(1, dcacheParams.nTLBWays*dcacheParams.nTLBSets)))
+  val htlb = Module(new HTLB(rocket.TLBConfig(coreParams.nL1HTLBEntries/coreParams.nL1HTLBWays, coreParams.nL1HTLBWays)))
   io.htw <> htlb.io.htw
   io.htlb_mem <> htlb.io.mem
   htlb.io.htDump <> io.core.htDump

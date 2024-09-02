@@ -98,6 +98,11 @@ case class BoomCoreParams(
   scontextWidth: Int = 0,
   trace: Boolean = false,
 
+  nL1HTLBWays: Int = 1,
+  nL1HTLBEntries: Int = 8,
+  nL2HTLBWays: Int = 1,
+  nL2HTLBEntries: Int = 512,
+
   /* debug stuff */
   enableCommitLogPrintf: Boolean = false,
   enableBranchPrintf: Boolean = false,
