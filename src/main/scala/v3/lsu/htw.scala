@@ -371,7 +371,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         ds2_hte.frozen := DontCare
         ds2_hte.small := DontCare
 
-        when(ds2_hit) {
+        when(ds2_hit && dr_valid_vec(way)) {
           d_hid := Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx)
           midas.targetutils.SynthesizePrintf(printf(
             "[HTW]  L2Entry: %d: %d, Valid(%d) %x - %x\n",
