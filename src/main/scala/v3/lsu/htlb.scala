@@ -133,7 +133,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     ))
   }
 
-  io.htw.evict.valid := state === s_victim_wait
+  io.htw.evict.valid := state === s_victim_wait && !io.htw.evict_resp
   io.htw.evict.bits.hid := victim_entry.tag
   io.htw.evict.bits.addr := vic.addr
   io.htw.evict.bits.phys := vic.phys
