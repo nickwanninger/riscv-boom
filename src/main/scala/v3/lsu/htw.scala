@@ -78,6 +78,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val requestor = Flipped(new HTLBHTWIO)
     val mem = new HellaCacheIO
     val dpath = new DatapathHTWIO
+    val ptw_access = Input(Valid(UInt(maxSVAddrBits.W)))
   })
 
   // State Machine
@@ -643,9 +644,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.mem.req.bits.data := Mux(state === s_dumping_wait, d_hid, 0.U)
     io.mem.req.bits.mask := Mux(state === s_dumping_wait, ((1 << coreDataBytes) - 1).U, 0.U)
 
+    val replay_htw_req = io.ptw_access.valid && io.mem.req.valid
 
     // TODO: This may need to change if we get an exception in the middle of a handle table walk
-    io.mem.s1_kill := l2_hit || (state =/= s_wait1 && state =/= s_dumping_wait)
+    io.mem.s1_kill := l2_hit || (state =/= s_wait1 && state =/= s_dumping_wait) || replay_htw_req 
     io.mem.s1_data.data := Mux(state === s_dumping_wait, d_hid, 0.U)
     io.mem.s1_data.mask := Mux(state === s_dumping_wait, ((1 << coreDataBytes) - 1).U, 0.U)
     io.mem.s2_kill := false.B

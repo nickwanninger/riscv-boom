@@ -244,6 +244,7 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer){
   core.io.htw <> htw.io.dpath
   htw.io.requestor <> lsu.io.htw
   htw.io.mem +=: hellaCachePorts
+  htw.io.ptw_access <> ptw.io.l2tlb_miss
 
   // L1 HTLB Access to Cache
   lsu.io.htlb_mem +=: hellaCachePorts
