@@ -300,7 +300,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   when (io.htInval.orR) {
     when (io.htInval === ((BigInt(1) << handleBits) - 1).U) {
-      midas.targetutils.SynthesizePrintf(printf("[HTW] Invalidating all entries\n"))
+      midas.targetutils.SynthesizePrintf(printf("[HTLB] Invalidating all entries\n"))
       for (e <- entries) {
         e.invalidate()
       }
