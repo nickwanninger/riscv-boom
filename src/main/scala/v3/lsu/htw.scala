@@ -362,8 +362,18 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       // val ds2_hit = ds2_valid && ds2_hit_vec.orR && !ds2_error
 
       val ds2_hte = Wire(new L2HTLBEntry(nL2HTLBSets))
+      val way = RegInit(0.U(log2Ceil(nL2HTLBSets).W))
+
+      // Updated logic for set_idx
+      val set_idx_update = way_idx === coreParams.nL2HTLBWays.U && (state === s_dumping)
+      // Logic for updating way_idx
+      val way_idx_update = ((state === s_dumping && !ds2_hit && pipeline_stage >= 2.U) || (state === s_dumping_wait && mem_resp_valid)) && !set_idx_update
+
+      val way_clear = (set_idx_update || (state === s_dumping_wait && way_idx === coreParams.nL2HTLBWays.U)) || (!io.dpath.customCSRs.htDump.orR && state === s_dumping)
+      val set_clear = !io.dpath.customCSRs.htDump.orR && state === s_dumping
+
       when (state === s_dumping && way_idx < coreParams.nL2HTLBWays.U && set_idx < nL2HTLBSets.U) {
-        val way = l2_plru.way(set_idx)
+        way := Mux(set_idx === 0.U && way_idx === 0.U, l2_plru.way(set_idx), Mux((RegNext(way_idx_update) || way_clear), RegNext(l2_plru.way(set_idx)), way))
 
         val ds2_hit_entry = Mux1H(UIntToOH(way), ds2_entry_vec)
         ds2_hte.addr := ds2_hit_entry.addr
@@ -390,24 +400,17 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         ds2_hte := DontCare
       }
 
-      // Updated logic for set_idx
-      val set_idx_update = way_idx === coreParams.nL2HTLBWays.U && (state === s_dumping)
-      // Logic for updating way_idx
-      val way_idx_update = ((state === s_dumping && !ds2_hit && pipeline_stage === 2.U) || (state === s_dumping_wait && mem_resp_valid)) && !set_idx_update
-
-      val way_clear = (set_idx_update || (state === s_dumping_wait && way_idx === coreParams.nL2HTLBWays.U)) || (!io.dpath.customCSRs.htDump.orR && state === s_dumping)
-      val set_clear = !io.dpath.customCSRs.htDump.orR && state === s_dumping
-
       way_idx := Mux(way_idx_update, 
                       way_idx + 1.U,
                          Mux(way_clear, 0.U,
                       way_idx))
 
       // Update pipeline stage
-      when ((pipeline_stage === 2.U && RegNext(way_idx_update)) || (set_clear && way_clear)) {
+      when ((pipeline_stage >= 2.U && RegNext(way_idx_update)) || (set_clear && way_clear)) {
         pipeline_stage := 0.U
       } .elsewhen(state === s_dumping) {
-        pipeline_stage := Mux(pipeline_stage === 2.U, 2.U, pipeline_stage + 1.U)
+        // pipeline_stage := Mux(pipeline_stage === 2.U, 2.U, pipeline_stage + 1.U)
+        pipeline_stage := pipeline_stage + 1.U
       }
 
       set_idx := Mux(set_idx_update, 
