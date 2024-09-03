@@ -292,8 +292,8 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   io.miss_rdy := state === s_ready
   for (w <- 0 until memWidth) {
     when (!io.resp(w).miss) {
-    printf("[TLB] -> [LSU] req[%d]: vaddr=0x%x paddr=0x%x size=%d cmd=%d\n",
-      w.U, io.req(w).bits.vaddr, io.resp(w).paddr, io.req(w).bits.size, io.req(w).bits.cmd)
+      printf("[TLB] -> [LSU] req[%d]: vaddr=0x%x paddr=0x%x size=%d cmd=%d\n",
+        w.U, io.req(w).bits.vaddr, io.resp(w).paddr, io.req(w).bits.size, io.req(w).bits.cmd)
     }
     io.req(w).ready    := true.B
     io.resp(w).pf.ld   := (bad_va(w) && cmd_read(w)) || (pf_ld_array(w) & hits(w)).orR
