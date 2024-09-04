@@ -310,11 +310,15 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val set_idx = RegInit(0.U((idxBits + 1).W))
       val way_idx = RegInit(0.U((log2Ceil(coreParams.nL2HTLBWays) + 1).W))
       io.dpath.htDumped := set_idx === nL2HTLBSets.U && state === s_dumping
-      io.dpath.htInvald := state ===  s_invalidated
+      io.dpath.htInvald := state === s_invalidated
 
       when (io.dpath.htDumped) {
         midas.targetutils.SynthesizePrintf(printf("[HTW] Finished dumping\n"))
         dumped_htlb_idx := 0.U
+      }
+
+      when (io.dpath.htInvald) {
+        midas.targetutils.SynthesizePrintf(printf("[HTW] Finished invalidating\n"))
       }
 
       when(io.requestor.l1_dumped && state === s_ready && io.dpath.customCSRs.htDump.orR) {
@@ -333,7 +337,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val pipeline_stage = RegInit(0.U(2.W))
 
       // val dr_valid_vec = ShiftRegister(valid.map(_(set_idx)).asUInt, 2)
-      val dr_valid_vec = valid.map(_(set_idx(idxBits,0))).asUInt
+      val dr_valid_vec = valid.map(_(set_idx(idxBits-1,0))).asUInt
       val ds0_valid = state === s_dumping && pipeline_stage === 0.U
       val ds1_valid = RegNext(ds0_valid)
       val ds2_valid = RegNext(ds1_valid) && pipeline_stage === 2.U
@@ -455,16 +459,18 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       //   next_state := s_ready
       // }
 
-      when (state === s_invalidating) {
-        when (io.dpath.customCSRs.htInval === ((BigInt(1) << handleBits) - 1).U) {
+      // when (state === s_invalidating) {
+      when (io.dpath.customCSRs.htInval.orR) {
+        printf("[HTW] State: %d\n", state)
+        when (io.dpath.customCSRs.htInval(handleBits -1, 0) === ((BigInt(1) << handleBits) - 1).U) {
           midas.targetutils.SynthesizePrintf(printf("[HTW] Invalidating all entries\n"))
           for (way <- 0 until coreParams.nL2HTLBWays) {
             valid(way) := 0.U
           }
           next_state := s_invalidated
         } .otherwise {
-          midas.targetutils.SynthesizePrintf(printf("[HTW] Invalidating %x\n", io.dpath.customCSRs.htInval))
-          val (i_tag, i_idx) = Split(io.dpath.customCSRs.htInval, idxBits)
+          midas.targetutils.SynthesizePrintf(printf("[HTW] Invalidating %x\n", io.dpath.customCSRs.htInval(handleBits -1, 0)))
+          val (i_tag, i_idx) = Split(io.dpath.customCSRs.htInval(handleBits -1, 0), idxBits)
 
           val i_valid_vec = valid.map(_(i_idx)).asUInt
           val i0_valid = state === s_invalidating

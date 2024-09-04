@@ -290,7 +290,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   }
 
   when (io.htw.htInvald) {
-    midas.targetutils.SynthesizePrintf(printf("[Core] HTW Invalidation Completed\n"))
+    midas.targetutils.SynthesizePrintf(printf("[Core] HTLBs Invalidation Completed\n"))
   }
 
   // TODO: fix possible consistency violation or worse if user tries to set csr while dump hasn't finished
