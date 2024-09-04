@@ -18,7 +18,7 @@ import freechips.rocketchip.diplomacy.BufferParams.pipe
 
 class HTE(implicit p: Parameters) extends BoomBundle()(p) {
   val small = Bool()
-  val frozen = Bool()
+  // val frozen = Bool()
   val reserved = UInt((64 - maxSVAddrBits - 2).W)
   val addr = UInt(maxSVAddrBits.W)
 }
@@ -27,7 +27,7 @@ class L2HTLBEntry(nSets: Int)(implicit p: Parameters) extends BoomBundle()(p) {
   val idxBits = log2Ceil(nSets)
   val tagBits = handleBits - idxBits
   val tag = UInt(tagBits.W)
-  val frozen = Bool()
+  // val frozen = Bool()
   val small = Bool()
   val addr = UInt(maxSVAddrBits.W)
 }
@@ -213,7 +213,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
         val entry = Wire(new L2HTLBEntry(nL2HTLBSets))
         entry.small := v_hte.small
-        entry.frozen := v_hte.frozen
+        // entry.frozen := v_hte.frozen
         entry.addr := v_hte.addr
         entry.tag := v_tag
         // if all the way are valid, use plru to select one way to be replaced,
@@ -291,7 +291,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val s2_hte = Wire(new HTE)
       val s2_hit_entry = Mux1H(s2_hit_vec, s2_entry_vec)
       s2_hte.addr := s2_hit_entry.addr
-      s2_hte.frozen := s2_hit_entry.frozen
+      // s2_hte.frozen := s2_hit_entry.frozen
       s2_hte.reserved := 0.U
       s2_hte.small := s2_hit_entry.small
 
@@ -378,7 +378,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         val ds2_hit_entry = Mux1H(UIntToOH(way), ds2_entry_vec)
         ds2_hte.addr := ds2_hit_entry.addr
         ds2_hte.tag := ds2_hit_entry.tag
-        ds2_hte.frozen := DontCare
+        // ds2_hte.frozen := DontCare
         ds2_hte.small := DontCare
 
         when(ds2_hit && dr_valid_vec(way)) {
@@ -514,8 +514,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val pte = WireDefault(tmp)
     when(mem_resp_valid && state === s_wait3) {
       midas.targetutils.SynthesizePrintf(printf(
-        "[HTW] Found HTE - Frozen: %x, Reserved: %x, Addr: %x, Small: %d\n",
-        pte.frozen,
+        "[HTW] Found HTE - Frozen: Reserved: %x, Addr: %x, Small: %d\n",
+        // pte.frozen,
         pte.reserved,
         pte.addr,
         pte.small
@@ -541,7 +541,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         v_hid := Mux(io.requestor.evict.valid, io.requestor.evict.bits.hid, 0.U)
         v_hte.addr := Mux(io.requestor.evict.valid, io.requestor.evict.bits.addr, 0.U)
         v_hte.small := Mux(io.requestor.evict.valid, io.requestor.evict.bits.small, false.B)
-        v_hte.frozen := Mux(io.requestor.evict.valid, false.B, false.B)
+        // v_hte.frozen := Mux(io.requestor.evict.valid, false.B, false.B)
         v_hte.reserved := Mux(io.requestor.evict.valid, 0.U, 0.U)
 
         // when(io.requestor.evict.valid) {

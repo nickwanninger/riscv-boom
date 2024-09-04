@@ -52,7 +52,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   class HTLBEntryData() extends Bundle() {
     val phys = Bool()
     val addr = UInt(xLen.W)
-    val immovable = Bool()
+    // val immovable = Bool()
     val small = Bool()
   }
 
@@ -75,13 +75,13 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
     def invalidate() = { valid := false.B }
 
-    def lock(hid: UInt) = {
-      getData().immovable := true.B
-    }
+    // def lock(hid: UInt) = {
+    //   getData().immovable := true.B
+    // }
 
-    def unlock(hid: UInt) = {
-      getData().immovable := false.B
-    }
+    // def unlock(hid: UInt) = {
+    //   getData().immovable := false.B
+    // }
   }
 
   // Utilities
@@ -222,10 +222,10 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         val new_entry = Wire(new HTLBEntryData())
         new_entry.addr := Cat(ppn, e.getData().addr(corePgIdxBits - 1, 0))
         // printf("New Entry Addr: %x\n", new_entry.addr)
-        new_entry.immovable := e.getData().immovable
+        // new_entry.immovable := e.getData().immovable
         new_entry.small := e.getData().small
         new_entry.phys := true.B
-        printf("[HTLB] New Entry (tag: %d): %x, %d, %d, %d\n", e.tag, new_entry.addr, new_entry.immovable, new_entry.small, new_entry.phys)
+        printf("[HTLB] New Entry (tag: %d): %x, %d, %d, %d\n", e.tag, new_entry.addr, new_entry.small, new_entry.phys)
 
         e.data := new_entry.asUInt
       }
@@ -264,13 +264,13 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val newEntry = Wire(new HTLBEntryData)
     newEntry.phys := false.B
     newEntry.addr := io.htw.resp.bits.hte.addr
-    newEntry.immovable := false.B // io.htw.resp.bits.immovable
+    // newEntry.immovable := false.B // io.htw.resp.bits.immovable
     newEntry.small := io.htw.resp.bits.hte.small
 
     midas.targetutils.SynthesizePrintf(printf(
       "[HTLB] New Entry: %x, %d, %d, filling in (tag: %d) \n",
       newEntry.addr,
-      newEntry.immovable,
+      // newEntry.immovable,
       newEntry.phys,
       r_refill_tag
     ))
@@ -375,13 +375,13 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     when(hit) {
       val entry = entries(way).data.asTypeOf(new HTLBEntryData)
       midas.targetutils.SynthesizePrintf(printf(
-        "[HTLB] L1Entry: %d: %d,  %x, %x (%d), %d\n",
+        "[HTLB] L1Entry: %d: %d,  %x, %x (%d)\n",
         way,
         entries(way).valid,
         entries(way).tag,
         entry.addr,
         entry.phys,
-        entry.immovable
+        // entry.immovable
       ))
       d_hid := entries(way).tag
       next_state := s_ht_dump_wait
