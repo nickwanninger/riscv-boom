@@ -261,7 +261,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.perf.acquire := io.dmem.perf.acquire
   io.core.perf.release := io.dmem.perf.release
 
-  val htlb = Module(new HTLB(rocket.TLBConfig(coreParams.nL1HTLBEntries/coreParams.nL1HTLBWays, coreParams.nL1HTLBWays)))
+  val htlb = Module(new HTLB(rocket.TLBConfig(boomParams.nL1HTLBEntries/boomParams.nL1HTLBWays, boomParams.nL1HTLBWays)))
   io.htw <> htlb.io.htw
   io.htlb_mem <> htlb.io.mem
   htlb.io.htDump <> io.core.htDump
@@ -690,6 +690,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   val exe_htlb_miss  = widthMap(w => Mux(htlb_enabled, htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready), false.B))
 
+  printf("htlb.io.resp.addr: %x\n", htlb.io.resp(0).addr)
+  printf("exe_htlb_vaddr: %x\n", exe_htlb_vaddr(0))
+  printf("htlb_enabled: %d\n", htlb_enabled)
   val exe_tlb_vaddr = widthMap(w => Mux(htlb_enabled, htlb.io.resp(w).addr, exe_htlb_vaddr(w)))
 
   val exe_passthr= widthMap(w =>
@@ -704,6 +707,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     dtlb.io.req(w).bits.passthrough := exe_passthr(w)
     dtlb.io.req(w).bits.v           := io.ptw.status.v
     dtlb.io.req(w).bits.prv         := io.ptw.status.prv
+    printf("DTLB req valid(%d): %x %d %d %d %d %d\n", dtlb.io.req(w).valid, dtlb.io.req(w).bits.vaddr, dtlb.io.req(w).bits.size, dtlb.io.req(w).bits.cmd, dtlb.io.req(w).bits.passthrough, dtlb.io.req(w).bits.v, dtlb.io.req(w).bits.prv)
 
     when (dtlb.io.req(w).valid) {
       when (htlb_enabled) {
@@ -772,6 +776,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val small_handle_criterium = widthMap(w => !exe_htlb_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).small)
 
   for (w <- 0 until memWidth) {
+    printf("exe_tlb_padddr(%d): %x, dtlb: %x\n", w.U, exe_tlb_paddr(w), dtlb.io.resp(w).paddr)
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr || exe_req(w).bits.sfence.valid, "[lsu] paddrs should match.")
 
     when(!dtlb.io.resp(w).miss && htlb_enabled && dtlb.io.req(w).bits.vaddr =/= 0.U) {

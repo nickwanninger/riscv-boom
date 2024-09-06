@@ -342,7 +342,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val ds1_valid = RegNext(ds0_valid)
       val ds2_valid = RegNext(ds1_valid) && pipeline_stage === 2.U
       // read from tlb idx
-      val ds1_rdata = ram.read(set_idx, ds0_valid)
+      val ds1_rdata = ram.read(set_idx(idxBits-1,0), ds0_valid)
       val ds2_rdata =
         ds1_rdata.map(ds1_rdway => code.decode(RegEnable(ds1_rdway, ds1_valid)))
       val ds2_error = (0 until coreParams.nL2HTLBWays)
@@ -386,20 +386,20 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         ds2_hte.small := DontCare
 
         when(ds2_hit && dr_valid_vec(way)) {
-          d_hid := Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx)
+          d_hid := Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx(idxBits-1,0))
           midas.targetutils.SynthesizePrintf(printf(
             "[HTW]  L2Entry: %d: %d, Valid(%d) %x - %x\n",
-            set_idx, 
+            set_idx(idxBits-1,0), 
             way,
             dr_valid_vec(way),
-            Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx),
+            Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx(idxBits-1,0)),
             ds2_hte.addr
           ))
           next_state := s_dumping_wait
         }
         // printf("Set: %d, Way: %d - Valid(%d), ds2(%d)\n", set_idx, way, dr_valid_vec(way), ds2_valid)
 
-        l2_plru.access(set_idx, way)
+        l2_plru.access(set_idx(idxBits-1,0), way)
       }.otherwise {
         ds2_hte := DontCare
       }
