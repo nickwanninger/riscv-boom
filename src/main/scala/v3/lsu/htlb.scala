@@ -47,6 +47,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val htBase = Input(UInt(maxSVAddrBits.W))
     val sfence = Input(Valid(new SFenceReq))
     val kill = Input(Bool())
+    val ptw_access = Input(Bool())
   })
 
   class HTLBEntryData() extends Bundle() {
@@ -429,9 +430,13 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   io.mem.req.bits.mask := ((1 << coreDataBytes) - 1).U
 
   // printf("io.mem.req.valid: %d, s1_kill: %d\n", io.mem.req.valid, io.mem.s1_kill)
+  val replay_htlb_dump_req = io.ptw_access && io.mem.req.valid
+  when (replay_htlb_dump_req) {
+    midas.targetutils.SynthesizePrintf(printf("[HTLB] Replaying HTLB Dump\n"))
+  }
 
-  io.mem.s1_kill := state =/= s_ht_dump_wait
+  io.mem.s1_kill := state =/= s_ht_dump_wait || replay_htlb_dump_req
   io.mem.s1_data.data := d_hid
   io.mem.s1_data.mask := ((1 << coreDataBytes) - 1).U
-  io.mem.s2_kill := false.B
+  io.mem.s2_kill := replay_htlb_dump_req
 }

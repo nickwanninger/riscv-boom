@@ -564,7 +564,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         next_state := Mux(io.mem.req.ready, s_wait1, s_req)
       }
       is(s_wait1) {
-        next_state := Mux(l2_hit, s_ready, s_wait2)
+        next_state := Mux(l2_hit, s_req, s_wait2)
       }
       is (s_wait2) {
         next_state := s_wait3
@@ -662,7 +662,11 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.mem.s1_kill := l2_hit || (state =/= s_wait1 && state =/= s_dumping_wait) || replay_htw_req 
     io.mem.s1_data.data := Mux(state === s_dumping_wait, d_hid, 0.U)
     io.mem.s1_data.mask := Mux(state === s_dumping_wait, ((1 << coreDataBytes) - 1).U, 0.U)
-    io.mem.s2_kill := false.B
+    io.mem.s2_kill := Mux(state === s_dumping_wait, replay_htw_req, false.B)
+
+    when (io.mem.req.valid) {
+      midas.targetutils.SynthesizePrintf(printf("[HTW] Killed %d, %d\n", io.mem.s1_kill, io.mem.s2_kill))
+    }
 
     // when (io.mem.s1_kill && io.mem.req.valid) {
       // printf("acccidentally killed? - %d, %d\n", l2_hit, state)

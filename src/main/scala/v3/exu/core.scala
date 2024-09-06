@@ -1445,6 +1445,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.ptw.status     := csr.io.status
   io.ptw.pmp        := csr.io.pmp
   io.ptw.sfence     := io.ifu.sfence
+  io.htw.sfence     := io.ifu.sfence
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------
