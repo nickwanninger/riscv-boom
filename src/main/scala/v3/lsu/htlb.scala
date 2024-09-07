@@ -45,7 +45,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val htDump = Input(UInt(xLen.W))
     val htInval = Input(UInt(handleBits.W))
     val htBase = Input(UInt(maxSVAddrBits.W))
-    val sfence = Input(Valid(new SFenceReq))
     val kill = Input(Bool())
     val ptw_access = Input(Bool())
   })
@@ -218,7 +217,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
   }
 
-  val sfence = io.sfence.valid
   for (w <- 0 until memWidth) {
     when(
       io.req(w).fire && htlb_miss(w) && state === s_ready && !io
@@ -256,21 +254,13 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   }
 
   when(state === s_request) {
-    when (sfence) { next_state := s_ready }
-    when (io.htw.req.ready) { next_state := Mux(sfence, s_wait_invalidate, s_wait) }
-  }
-  when (state === s_wait && sfence) {
-    next_state := s_wait_invalidate
+    when (io.htw.req.ready) { next_state := s_wait }
   }
   when (state === s_wait_invalidate) {
     next_state := s_ready
   }
   when(io.htw.resp.valid) {
     next_state := s_ready
-  }
-
-  when (sfence) {
-    entries.foreach(_.foreach(_.invalidate()))
   }
 
   // Send request to L2 HTLB if miss

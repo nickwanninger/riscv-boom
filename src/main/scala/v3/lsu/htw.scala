@@ -63,7 +63,6 @@ class HTWPerfEvents(implicit p: Parameters) extends BoomBundle()(p) {
 }
 
 class DatapathHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
-  val sfence = Flipped(Valid(new SFenceReq))
   val perf = Output(new HTWPerfEvents())
   val customCSRs = Flipped(coreParams.customCSRs)
   val htDumped = Output(Bool())
@@ -98,7 +97,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
   }
 
   val clock_en =
-    state =/= s_ready || l2_refill_wire || io.requestor.req.valid || io.dpath.customCSRs.disableDCacheClockGate || io.dpath.sfence.valid
+    state =/= s_ready || l2_refill_wire || io.requestor.req.valid || io.dpath.customCSRs.disableDCacheClockGate
   io.dpath.clock_enabled := usingVM.B && clock_en
   val gated_clock =
     if (!usingVM || !tileParams.dcache.get.clockGate) clock
@@ -109,12 +108,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     io.requestor.req.ready := (state === s_ready) && !l2_refill_wire
 
-    val invalidated = Reg(Bool())
     val r_hte = Reg(new HTE)
     val v_hte = Reg(new HTE)
     val v_hid = Reg(UInt(handleBits.W))
-
-    invalidated := (invalidated && state =/= s_ready) || io.dpath.sfence.valid
 
     /* debug print for handle table walks */
     when(io.mem.req.valid && state =/= s_dumping_wait) {
@@ -197,8 +193,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val r_valid_vec = valid.map(_(r_idx)).asUInt
       val r_valid_vec_q = Reg(UInt(boomParams.nL2HTLBWays.W))
       r_valid_vec_q := r_valid_vec
-      // refill with r_pte(leaf pte)
-      when(l2_refill && !invalidated) {
+      when(l2_refill) {
         val (v_tag, v_idx) = Split(v_hid, idxBits)
 
         val v_valid_vec = valid.map(_(v_idx)).asUInt
@@ -238,14 +233,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         for (way <- 0 until boomParams.nL2HTLBWays) {
           when(wmask(way)) {
             valid(way) := valid(way) | mask
-            //   g(way) := Mux(r_pte.g, g(way) | mask, g(way) & ~mask)
           }
-        }
-      }
-      when(io.dpath.sfence.valid) {
-        // printf("[HTW] Invalidating all entries\n")
-        for (way <- 0 until boomParams.nL2HTLBWays) {
-          valid(way) := 0.U
         }
       }
 
@@ -606,7 +594,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       next_state := Mux(state === s_wait2, s_req, s_dumping_wait)
     }
 
-    io.requestor.evict_resp := l2_refill && !invalidated
+    io.requestor.evict_resp := l2_refill
 
     io.dpath.perf.l1miss := io.requestor.l1miss
 
