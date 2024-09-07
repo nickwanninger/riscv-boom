@@ -90,6 +90,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   def widthMap[T <: Data](f: Int => T) = VecInit((0 until memWidth).map(f))
   val hm_enabled = widthMap(w => !io.req(w).bits.passthrough)
   val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleOffsetBits))
+  val idxBits = log2Ceil(cfg.nSets)
 
   // L1 TLB Entries
   val entries = Reg(Vec(cfg.nSets, Vec(cfg.nWays, new Entry(cfg.nSets))))
@@ -117,34 +118,33 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val real_hits = Wire(Vec(memWidth, UInt(cfg.nWays.W)))
   val hitVec = Wire(Vec(memWidth, Vec(cfg.nWays, Bool())))
   for (w <- 0 until memWidth) {
-    printf("w: %d, hid: %x, hid_tag: %x, hid_set: %x\n", w.U, hid(w), hid_tag(w), hid_set(w))
+  //   printf("w: %d, hid: %x, hid_tag: %x, hid_set: %x\n", w.U, hid(w), hid_tag(w), hid_set(w))
     hitVec(w) := entries(hid_set(w)).map(hm_enabled(w) && _.hit(hid_tag(w)))
-    printf("hitVec: %x\n", hitVec(w).asUInt)
+  //   printf("hitVec: %x\n", hitVec(w).asUInt)
     real_hits(w) := hitVec(w).asUInt
-    printf("real_hits: %x\n", real_hits(w))
+  //   printf("real_hits: %x\n", real_hits(w))
     htlb_hit(w) := real_hits(w).orR
-    printf("htlb_hit: %x\n", htlb_hit(w))
+  //   printf("htlb_hit: %x\n", htlb_hit(w))
     htlb_miss(w) := hm_enabled(w) && !htlb_hit(w)
-    printf("htlb_miss: %x\n", htlb_miss(w))
+  //   printf("htlb_miss: %x\n", htlb_miss(w))
   }
 
-  for (s <- 0 until cfg.nSets) {
-    printf("[HTLB] Set %d\n", s.U)
-    for (w <- 0 until cfg.nWays) {
-      when(entries(s)(w).valid) {
-        val entry = entries(s)(w).data.asTypeOf(new HTLBEntryData)
-        printf(
-          "[HTLB] Entry %d: %d,  %x, %x (%d), %d\n",
-          w.U,
-          entries(s)(w).valid,
-          entries(s)(w).tag,
-          entry.addr,
-          entry.phys,
-          entry.immovable
-        )
-      }
-    }
-  }
+  // for (s <- 0 until cfg.nSets) {
+  //   printf("[HTLB] Set %d\n", s.U)
+  //   for (w <- 0 until cfg.nWays) {
+  //     when(entries(s)(w).valid) {
+  //       val entry = entries(s)(w).data.asTypeOf(new HTLBEntryData)
+  //       printf(
+  //         "[HTLB] Entry %d: %d,  %x, %x (%d)\n",
+  //         w.U,
+  //         entries(s)(w).valid,
+  //         entries(s)(w).tag,
+  //         entry.addr,
+  //         entry.phys
+  //       )
+  //     }
+  //   }
+  // }
 
   /*
   val hitsVec =
@@ -287,7 +287,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     newEntry.small := io.htw.resp.bits.hte.small
 
     midas.targetutils.SynthesizePrintf(printf(
-      "[HTLB] New Entry: %x, %d, %d, filling in (tag: %d) \n",
+      "[HTLB] New Entry: %x, %d, filling in (tag: %d) \n",
       newEntry.addr,
       // newEntry.immovable,
       newEntry.phys,
@@ -296,9 +296,9 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
     val (r_tag, r_idx) = Split(r_refill_hid, idxBits)
     val repl_way = l1_plru.way(r_idx)
-    printf("[HTLB] Replacing way: %d, with tag: %d in set: %d\n", repl_way, r_tag, r_idx)
+    // printf("[HTLB] Replacing way: %d, with tag: %d in set: %d\n", repl_way, r_tag, r_idx)
     val e = entries(r_idx)(repl_way)
-    printf("[HTLB] Replacing Entry: Valid: %d, Tag: %d, Addr: %x, Phys: %d, Immovable: %d\n", e.valid, e.tag, e.getData().addr, e.getData().phys, e.getData().immovable)
+    // printf("[HTLB] Replacing Entry: Valid: %d, Tag: %d, Addr: %x, Phys: %d\n", e.valid, e.tag, e.getData().addr, e.getData().phys)
     // make a copy of the victim entry, and set the victim flag to notify the L2 HTLB
     state := Mux(e.valid, s_victim_wait, s_ready)
     victim_entry := e
@@ -461,7 +461,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     midas.targetutils.SynthesizePrintf(printf("[HTLB] Replaying HTLB Dump\n"))
   }
 
-  io.mem.s1_kill := state =/= s_ht_dump_wait || replay_htlb_dump_req
+  io.mem.s1_kill := state =/= s_dumping_wait || replay_htlb_dump_req
   io.mem.s1_data.data := d_hid
   io.mem.s1_data.mask := ((1 << coreDataBytes) - 1).U
   io.mem.s2_kill := replay_htlb_dump_req
