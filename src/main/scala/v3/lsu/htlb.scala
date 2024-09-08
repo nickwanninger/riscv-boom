@@ -163,6 +163,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   // val victim_ready :: victim_wait :: Nil = Enum(2)
   // val victim = RegInit(victim_ready)
   val victim_entry = Reg(new Entry(cfg.nSets))
+  val vic_hid = Reg(UInt(handleBits.W))
   val vic = victim_entry.data.asTypeOf(new HTLBEntryData)
 
   when(io.htw.evict.valid) {
@@ -174,7 +175,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   }
 
   io.htw.evict.valid := state === s_victim_wait && !io.htw.evict_resp
-  io.htw.evict.bits.hid := victim_entry.tag
+  io.htw.evict.bits.hid := vic_hid
   io.htw.evict.bits.addr := vic.addr
   io.htw.evict.bits.phys := vic.phys
   io.htw.evict.bits.small := vic.small
@@ -285,13 +286,22 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     ))
 
     val (r_tag, r_idx) = Split(r_refill_hid, idxBits)
-    val repl_way = l1_plru.way(r_idx)
+    val candidate_repl_way = (if (boomParams.nL1HTLBWays > 1)  l1_plru.way(r_idx) else 0.U)
+    val repl_way = 
+      if (boomParams.nL1HTLBWays > 1)
+            Mux(
+              entries(r_idx).map(_.valid).asUInt.andR,
+              candidate_repl_way,
+              OHToUInt(PriorityEncoderOH(~entries(r_idx).map(_.valid).asUInt)),
+            )
+          else 1.U(1.W)
     // printf("[HTLB] Replacing way: %d, with tag: %d in set: %d\n", repl_way, r_tag, r_idx)
     val e = entries(r_idx)(repl_way)
     // printf("[HTLB] Replacing Entry: Valid: %d, Tag: %d, Addr: %x, Phys: %d\n", e.valid, e.tag, e.getData().addr, e.getData().phys)
     // make a copy of the victim entry, and set the victim flag to notify the L2 HTLB
     state := Mux(e.valid, s_victim_wait, s_ready)
     victim_entry := e
+    vic_hid := Cat(e.tag, r_idx)
     // e.invalidate()
     e.insert(r_tag, newEntry)
   }
