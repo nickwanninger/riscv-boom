@@ -203,7 +203,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     io.req(w).ready := true.B
     io.resp(w).miss := do_refill || htlb_miss(w)
     io.resp(w).addr := Mux(io.req(w).bits.passthrough, effective_address,
-                          Mux (!io.resp(w).miss, addr(w) + io.req(w).bits.haddr(handleBits - 1, 0), 0.U))
+                          Mux (!io.resp(w).miss, addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0), 0.U))
     io.resp(w).phys := false.B
     io.resp(w).small := false.B
 
