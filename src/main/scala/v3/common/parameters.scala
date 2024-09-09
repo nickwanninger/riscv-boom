@@ -105,7 +105,7 @@ case class BoomCoreParams(
 
   enableHandleSupport: Int = 0,
   nL1HTLBWays: Int = 4,
-  nL1HTLBEntries: Int = 64,
+  nL1HTLBEntries: Int = 8,
   nL2HTLBWays: Int = 8,
   nL2HTLBEntries: Int = 512
 // DOC include end: BOOM Parameters

@@ -52,7 +52,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   class HTLBEntryData() extends Bundle() {
     val phys = Bool()
     val addr = UInt(xLen.W)
-    // val immovable = Bool()
     val small = Bool()
   }
   class Entry(nSets: Int) extends Bundle {
@@ -75,14 +74,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
 
     def invalidate() = { valid := false.B }
-
-    // def lock(hid: UInt) = {
-    //   getData().immovable := true.B
-    // }
-
-    // def unlock(hid: UInt) = {
-    //   getData().immovable := false.B
-    // }
   }
 
   // Utilities
@@ -117,15 +108,15 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val real_hits = Wire(Vec(memWidth, UInt(cfg.nWays.W)))
   val hitVec = Wire(Vec(memWidth, Vec(cfg.nWays, Bool())))
   for (w <- 0 until memWidth) {
-  //   printf("w: %d, hid: %x, hid_tag: %x, hid_set: %x\n", w.U, hid(w), hid_tag(w), hid_set(w))
+    // printf("w: %d, hid: %x, hid_tag: %x, hid_set: %x\n", w.U, hid(w), hid_tag(w), hid_set(w))
     hitVec(w) := entries(hid_set(w)).map(hm_enabled(w) && _.hit(hid_tag(w)))
-  //   printf("hitVec: %x\n", hitVec(w).asUInt)
+    // printf("hitVec: %x\n", hitVec(w).asUInt)
     real_hits(w) := hitVec(w).asUInt
-  //   printf("real_hits: %x\n", real_hits(w))
+    // printf("real_hits: %x\n", real_hits(w))
     htlb_hit(w) := real_hits(w).orR
-  //   printf("htlb_hit: %x\n", htlb_hit(w))
+    // printf("htlb_hit: %x\n", htlb_hit(w))
     htlb_miss(w) := hm_enabled(w) && !htlb_hit(w)
-  //   printf("htlb_miss: %x\n", htlb_miss(w))
+    // printf("htlb_miss: %x\n", htlb_miss(w))
   }
 
   // for (s <- 0 until cfg.nSets) {
@@ -155,7 +146,12 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   for (w <- 0 until memWidth) {
     when(io.req(w).valid && hm_enabled(w)) {
-      l1_plru.access(hid_set(w), OH1ToUInt(real_hits(w)))
+      when(real_hits(w).orR) {
+        midas.targetutils.SynthesizePrintf(printf(
+          "[HTLB] Hit (%x): Tag: %x in Set %d, Way %d\n", hid(w), hid_tag(w), hid_set(w), OH1ToUInt(real_hits(w))
+        ))
+        l1_plru.access(hid_set(w), OH1ToUInt(real_hits(w)))
+      }
     }
   }
 
@@ -329,23 +325,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
   }
 
-  // for (w <- 0 until memWidth) {
-  //   for ((e, i) <- entries.zipWithIndex) {
-  //     when(e.valid) {
-  //       val entry = e.data.asTypeOf(new HTLBEntryData)
-  //       printf(
-  //         "[HTLB] Entry %d: %d,  %x, %x (%d), %d\n",
-  //         i.U,
-  //         e.valid,
-  //         e.tag,
-  //         entry.addr,
-  //         entry.phys,
-  //         entry.immovable
-  //       )
-  //     }
-  //   }
-  // }
-
   // FSM Logic - get .way from plru, access it, get .way again. Do it until counter === n_ways for hits, go to final state, this marks completion, send resp to commit somehow, and then this is the end of the instruction.
 
   // Handle HTW Responses
@@ -362,7 +341,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   val set_idx = RegInit(0.U((log2Ceil(cfg.nSets) + 1).W))
   val way_idx = RegInit(0.U((log2Ceil(cfg.nWays) + 1).W))
-  val dumped_entry_idx = RegInit(0.U((log2Ceil(entries.size) + 1).W))
+  val dumped_entry_idx = RegInit(0.U((log2Ceil(boomParams.nL1HTLBEntries) + 1).W))
   
   when(io.htDump.orR && state === s_ready) {
     midas.targetutils.SynthesizePrintf(printf("[HTLB] Starting to dump L1\n"))
@@ -386,12 +365,15 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   val way_idx_update = (state === s_dumping && !hit) || (state === s_dumping_wait && mem_resp_valid)
   val set_idx_update = way_idx === cfg.nWays.U && state === s_dumping
+  // printf("way_idx_update: %d, set_idx_update: %d\n", way_idx_update, set_idx_update)
 
-  val way_clear = (set_idx_update || (state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U)) || (!io.htDump.orR && state === s_dumping)
+  val way_clear = (set_idx_update || (state === s_dumping_wait && way_idx === boomParams.nL1HTLBWays.U)) || (!io.htDump.orR && state === s_dumping)
   val set_clear = !io.htDump.orR && state === s_dumping
+  // printf("way_clear: %d, set_clear: %d\n", way_clear, set_clear)
 
   when (set_idx < cfg.nSets.U && way_idx < cfg.nWays.U && state === s_dumping) {
     val way = l1_plru.way(set_idx(idxBits-1,0))
+    printf("[HTLB] Dumping L1 Entry %d, %d\n", set_idx, way)
 
     hit := entries(set_idx(idxBits-1,0))(way).valid
     when(hit) {
@@ -411,10 +393,11 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     l1_plru.access(set_idx(idxBits-1,0), way)
   }
 
-  way_idx := Mux(way_idx_update, way_idx + 1.U, Mux(way_clear, 0.U, way_idx))
+  way_idx := Mux(way_clear, 0.U, Mux(way_idx_update, way_idx + 1.U, way_idx))
   set_idx := Mux(set_idx_update, set_idx + 1.U, 
-                     Mux(state === s_dumping_wait && way_idx === coreParams.nL2TLBWays.U, d_hid(idxBits-1,0) + 1.U, 
+                     Mux(state === s_dumping_wait && way_idx === boomParams.nL1HTLBWays.U, d_hid(idxBits-1,0) + 1.U, 
                          Mux(set_clear, 0.U, set_idx)))
+  // printf("set_idx: %d, way_idx: %d\n", set_idx, way_idx)
 
 
 

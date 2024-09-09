@@ -190,7 +190,7 @@ class WithNSmallYukons(n: Int = 1) extends Config(
   })
 )
 
-class WithNSmallMegaYukons(n: Int = 1) extends Config(
+class WithNLargeYukons(n: Int = 1) extends Config(
   new WithTAGELBPD ++ // Default to TAGE-L BPD
   new Config((site, here, up) => {
     case TilesLocated(InSubsystem) => {
