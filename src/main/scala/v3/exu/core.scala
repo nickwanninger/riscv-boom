@@ -300,6 +300,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   csr.io.customCSRs(3).set := io.htw.htInvald
   csr.io.customCSRs(3).sdata := 0.U
 
+  io.htw.clear_htlb := csr.io.clear_htlb
+  io.lsu.clear_htlb := csr.io.clear_htlb
+
   //val icache_blocked = !(io.ifu.fetchpacket.valid || RegNext(io.ifu.fetchpacket.valid))
   val icache_blocked = false.B
   csr.io.counters foreach { c => c.inc := RegNext(perfEvents.evaluate(c.eventSel)) }

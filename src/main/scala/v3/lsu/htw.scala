@@ -65,6 +65,7 @@ class DatapathHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
   val htDumped = Output(Bool())
   val htInvald = Output(Bool())
   val clock_enabled = Output(Bool())
+  val clear_htlb = Input(Bool())
 }
 
 class HTW(implicit p: Parameters) extends BoomModule()(p) {
@@ -447,6 +448,15 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           }
 
           next_state := Mux(i2_valid, s_invalidated, s_invalidating)
+        }
+      }
+    
+      when (reset.asBool || io.dpath.clear_htlb) {
+        when (io.dpath.clear_htlb) {
+          midas.targetutils.SynthesizePrintf(printf("[HTW] Clearing HTLB\n"))
+        }
+        for (way <- 0 until boomParams.nL2HTLBWays) {
+          valid(way) := 0.U
         }
       }
 

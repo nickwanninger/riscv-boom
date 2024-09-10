@@ -47,6 +47,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val htBase = Input(UInt(maxSVAddrBits.W))
     val kill = Input(Bool())
     val ptw_access = Input(Bool())
+    val clear_htlb = Input(Bool())
   })
 
   class HTLBEntryData() extends Bundle() {
@@ -306,7 +307,10 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     next_state := s_ready
   }
 
-  when(reset.asBool) {
+  when(reset.asBool || io.clear_htlb) {
+    when (io.clear_htlb) {
+      midas.targetutils.SynthesizePrintf(printf("[HTLB] Clearing HTLB\n"))
+    }
     entries.foreach(_.foreach(_.invalidate()))
   }
 
