@@ -17,7 +17,7 @@ import freechips.rocketchip.tilelink.TLMessages.c
 import freechips.rocketchip.diplomacy.BufferParams.pipe
 
 class HTE(implicit p: Parameters) extends BoomBundle()(p) {
-  val small = Bool()
+  val try_phys = Bool()
   val reserved = UInt((64 - maxSVAddrBits - 1).W)
   val addr = UInt(maxSVAddrBits.W)
 }
@@ -26,7 +26,7 @@ class L2HTLBEntry(nSets: Int)(implicit p: Parameters) extends BoomBundle()(p) {
   val idxBits = log2Ceil(nSets)
   val tagBits = handleBits - idxBits
   val tag = UInt(tagBits.W)
-  val small = Bool()
+  val try_phys = Bool()
   val addr = UInt(maxSVAddrBits.W)
 }
 
@@ -40,7 +40,7 @@ class HTWResp(implicit p: Parameters) extends BoomBundle()(p) {
 
 class EvictionReq(implicit p: Parameters) extends BoomBundle()(p) {
   val addr = UInt(xLen.W)
-  val small = Bool()
+  val try_phys = Bool()
   val phys = Bool()
   val hid = UInt(handleBits.W)
 }
@@ -194,7 +194,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
                           else 0.U)
 
         val entry = Wire(new L2HTLBEntry(nL2HTLBSets))
-        entry.small := v_hte.small
+        entry.try_phys := v_hte.try_phys
         entry.addr := v_hte.addr
         entry.tag := v_tag
         // if all the way are valid, use plru to select one way to be replaced,
@@ -261,7 +261,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val s2_hit_entry = Mux1H(s2_hit_vec, s2_entry_vec)
       s2_hte.addr := s2_hit_entry.addr
       s2_hte.reserved := 0.U
-      s2_hte.small := s2_hit_entry.small
+      s2_hte.try_phys := s2_hit_entry.try_phys
 
       for (way <- 0 until boomParams.nL2HTLBWays) {
         ccover(
@@ -300,9 +300,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         printf("[HTW] Finished dumping all entries\n")
       }
 
-      for (s <- 0 until boomParams.nL2HTLBWays) {
-        printf("Valid(%d): %b\n", s.U, valid(s).asUInt)
-      }
+      // for (s <- 0 until boomParams.nL2HTLBWays) {
+      //   printf("Valid(%d): %b\n", s.U, valid(s).asUInt)
+      // }
 
       val pipeline_stage = RegInit(0.U(2.W))
 
@@ -318,7 +318,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         .map(way => dr_valid_vec(way) && ds2_rdata(way).error)
         .orR
       when(ds2_valid && ds2_error) { valid.foreach { _ := 0.U } }
-      printf("ds2_valid: %d, ds2_error: %d\n", ds2_valid, ds2_error)
+      // printf("ds2_valid: %d, ds2_error: %d\n", ds2_valid, ds2_error)
       // decode
       val ds2_entry_vec =
         ds2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2HTLBSets)))
@@ -346,7 +346,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val way = RegInit(0.U(log2Ceil(boomParams.nL2HTLBWays).W))
       when ((way_idx_update && !set_idx_update) || RegNext(way_idx_update && set_idx_update)) {
         val new_way = l2_plru.way(set_idx)
-        printf("Updating way: %d -> new_way: %d, with set %d\n", way, new_way, set_idx)
+        // printf("Updating way: %d -> new_way: %d, with set %d\n", way, new_way, set_idx)
         way := l2_plru.way(set_idx)
       }
 
@@ -354,7 +354,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         val ds2_hit_entry = Mux1H(UIntToOH(way), ds2_entry_vec)
         ds2_hte.addr := ds2_hit_entry.addr
         ds2_hte.tag := ds2_hit_entry.tag
-        ds2_hte.small := DontCare
+        ds2_hte.try_phys := DontCare
 
         when(ds2_hit && dr_valid_vec(way)) {
           d_hid := Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx(idxBits-1,0))
@@ -368,12 +368,12 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           ))
           next_state := s_dumping_wait
           l2_plru.access(set_idx(idxBits-1,0), way)
-          printf("1 Accessing set: %d, way: %d\n", set_idx(idxBits-1,0), way)
+          // printf("1 Accessing set: %d, way: %d\n", set_idx(idxBits-1,0), way)
         } .elsewhen(ds2_valid) {
-          printf("2 Accessing set: %d, way: %d\n", set_idx(idxBits-1,0), way)
+          // printf("2 Accessing set: %d, way: %d\n", set_idx(idxBits-1,0), way)
           l2_plru.access(set_idx(idxBits-1,0), way)
         }
-        printf("Set: %d, Way: %d - Valid(%d), ds2(%d)\n", set_idx, way, dr_valid_vec(way), ds2_valid)
+        // printf("Set: %d, Way: %d - Valid(%d), ds2(%d)\n", set_idx, way, dr_valid_vec(way), ds2_valid)
       }.otherwise {
         ds2_hte := DontCare
       }
@@ -395,10 +395,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
                          Mux(set_clear, 0.U,
                          set_idx)))
 
-      printf("SetIdx: %d, WayIdx: %d\n", set_idx, way_idx)
-      printf("SetIdxUpdate: %d, WayIdxUpdate: %d\n", set_idx_update, way_idx_update)
-      printf("Pipeline Stage: %d\n", pipeline_stage)
-      printf("WayClear: %d, SetClear: %d\n", way_clear, set_clear)
+      // printf("SetIdx: %d, WayIdx: %d\n", set_idx, way_idx)
+      // printf("SetIdxUpdate: %d, WayIdxUpdate: %d\n", set_idx_update, way_idx_update)
+      // printf("Pipeline Stage: %d\n", pipeline_stage)
+      // printf("WayClear: %d, SetClear: %d\n", way_clear, set_clear)
 
       // when (state === s_invalidating) {
       when (io.dpath.customCSRs.htInval.orR) {
@@ -467,13 +467,14 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     // Debug HTW response
     val tmp = mem_resp_data.asTypeOf(new HTE())
     val pte = WireDefault(tmp)
+    pte.try_phys := true.B
     when(mem_resp_valid && state === s_wait3) {
       midas.targetutils.SynthesizePrintf(printf(
-        "[HTW] Found HTE - Frozen: Reserved: %x, Addr: %x, Small: %d\n",
+        "[HTW] Found HTE - Frozen: Reserved: %x, Addr: %x, try_phys: %d\n",
         // pte.frozen,
         pte.reserved,
         pte.addr,
-        pte.small
+        pte.try_phys
       ))
     }
 
@@ -495,7 +496,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
         v_hid := Mux(io.requestor.evict.valid, io.requestor.evict.bits.hid, 0.U)
         v_hte.addr := Mux(io.requestor.evict.valid, io.requestor.evict.bits.addr, 0.U)
-        v_hte.small := Mux(io.requestor.evict.valid, io.requestor.evict.bits.small, false.B)
+        v_hte.try_phys := Mux(io.requestor.evict.valid, io.requestor.evict.bits.try_phys, false.B)
         // v_hte.frozen := Mux(io.requestor.evict.valid, false.B, false.B)
         v_hte.reserved := Mux(io.requestor.evict.valid, 0.U, 0.U)
 
@@ -503,7 +504,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         //   v_hte.addr := io.requestor.evict.bits.addr
         //   v_hte.frozen := false.B
         //   v_hte.reserved := 0.U
-        //   v_hte.small := io.requestor.evict.bits.small
+        //   v_hte.try_phys := io.requestor.evict.bits.try_phys
         //   v_hid := io.requestor.evict.bits.hid
         // }
       }

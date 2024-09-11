@@ -769,7 +769,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val exe_tlb_paddr = widthMap(w => Mux(htlb.io.resp(w).phys, htlb.io.resp(w).addr, Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits), exe_tlb_vaddr(w)(corePgIdxBits-1,0))))
   val exe_tlb_uncacheable = widthMap(w => !(dtlb.io.resp(w).cacheable))
 
-  val small_handle_criterium = widthMap(w => !exe_htlb_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).small)
+  val small_handle_criterium = widthMap(w => !exe_htlb_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).try_phys)
 
   for (w <- 0 until memWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr || exe_req(w).bits.sfence.valid, "[lsu] paddrs should match.")
@@ -782,9 +782,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     // when (!exe_tlb_miss(w) && !exe_htlb_passthr(w)) {
     //  printf("exe_tlb_paddr(%d): %x, htlb: %x: \n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr)
     // }
-    htlb.io.tlb(w).valid := false.B // !exe_tlb_miss(w) && small_handle_criterium(w) && !exe_passthr(w)
+    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w) && !exe_passthr(w)
     htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)
-    htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits)
+    htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w)
 
     when (mem_xcpt_valids(w))
     {
