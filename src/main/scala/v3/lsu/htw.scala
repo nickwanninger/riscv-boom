@@ -210,7 +210,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           printf("refill_s2_hit: %x on set: %d, tag: %d\n", refill_s2_hit_vec.asUInt, v_idx, v_tag)
         }
 
-        when (!refill_s2_hit) {
+        when (refill_s2_valid && !refill_s2_hit_vec.orR) {
           val v_valid_vec = valid.map(_(v_idx)).asUInt
           val v_valid_vec_q = Reg(UInt(boomParams.nL2HTLBWays.W))
         
@@ -525,16 +525,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         v_hid := Mux(io.requestor.evict.valid, io.requestor.evict.bits.hid, 0.U)
         v_hte.addr := Mux(io.requestor.evict.valid, io.requestor.evict.bits.addr, 0.U)
         v_hte.try_phys := Mux(io.requestor.evict.valid, io.requestor.evict.bits.try_phys, false.B)
-        // v_hte.frozen := Mux(io.requestor.evict.valid, false.B, false.B)
         v_hte.reserved := Mux(io.requestor.evict.valid, 0.U, 0.U)
-
-        // when(io.requestor.evict.valid) {
-        //   v_hte.addr := io.requestor.evict.bits.addr
-        //   v_hte.frozen := false.B
-        //   v_hte.reserved := 0.U
-        //   v_hte.try_phys := io.requestor.evict.bits.try_phys
-        //   v_hid := io.requestor.evict.bits.hid
-        // }
       }
       is(s_req) {
         next_state := Mux(io.mem.req.ready, s_wait1, s_req)
