@@ -172,7 +172,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   when(io.htw.evict.valid) {
     midas.targetutils.SynthesizePrintf(printf(
       "[HTLB] Victim Entry (%x): %x\n",
-      victim_entry.tag,
+      vic_hid,
       vic.addr
     ))
   }

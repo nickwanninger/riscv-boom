@@ -183,42 +183,70 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       r_valid_vec_q := r_valid_vec
       when(l2_refill) {
         val (v_tag, v_idx) = Split(v_hid, idxBits)
+        val refill_r_valid_vec = valid.map(_(v_idx)).asUInt
 
-        val v_valid_vec = valid.map(_(v_idx)).asUInt
-        val v_valid_vec_q = Reg(UInt(boomParams.nL2HTLBWays.W))
-        
-        // replacement way
-        val v_l2_plru_way = Reg(UInt(log2Ceil(boomParams.nL2HTLBWays max 1).W))
-        v_valid_vec_q := v_valid_vec
-        v_l2_plru_way := (if (boomParams.nL2HTLBWays > 1) l2_plru.way(v_idx)
-                          else 0.U)
-
-        val entry = Wire(new L2HTLBEntry(nL2HTLBSets))
-        entry.try_phys := v_hte.try_phys
-        entry.addr := v_hte.addr
-        entry.tag := v_tag
-        // if all the way are valid, use plru to select one way to be replaced,
-        // otherwise use PriorityEncoderOH to select one
-        val wmask =
-          if (boomParams.nL2HTLBWays > 1)
-            Mux(
-              v_valid_vec_q.andR,
-              UIntToOH(v_l2_plru_way, boomParams.nL2HTLBWays),
-              PriorityEncoderOH(~v_valid_vec_q)
-            )
-          else 1.U(1.W)
-        ram.write(
-          v_idx,
-          VecInit(Seq.fill(boomParams.nL2HTLBWays)(code.encode(entry.asUInt))),
-          wmask.asBools
+        val refill_s0_valid = true.B
+        val refill_s1_valid = RegNext(refill_s0_valid)
+        val refill_s2_valid = RegNext(refill_s1_valid)
+        // read from htlb idx
+        val refill_s1_rdata = ram.read(v_idx, refill_s0_valid)
+        val refill_s2_rdata =
+          refill_s1_rdata.map(refill_s1_rdway => code.decode(RegEnable(refill_s1_rdway, refill_s1_valid)))
+        val refill_s2_valid_vec = RegEnable(refill_r_valid_vec, refill_s1_valid)
+        val refill_s2_error = (0 until boomParams.nL2HTLBWays)
+          .map(way => refill_s2_valid_vec(way) && refill_s2_rdata(way).error)
+          .orR
+        when(refill_s2_valid && refill_s2_error) { valid.foreach { _ := 0.U } }
+        printf("s2_valid: %d, s2_error: %d\n", refill_s2_valid, refill_s2_error)
+        // decode
+        val refill_s2_entry_vec =
+          refill_s2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(nL2HTLBSets)))
+        val refill_s2_hit_vec = (0 until boomParams.nL2HTLBWays).map(way =>
+          refill_s2_valid_vec(way) && (v_tag === refill_s2_entry_vec(way).tag)
         )
-        midas.targetutils.SynthesizePrintf(printf("[HTW] Inserting with addr: %x into set %d, way (%x) %d (tag)\n", entry.addr, v_idx, wmask, v_tag))
+        // printf("r_idx: %x, r_tag: %x, entry-vec-addr: %x\n", r_idx, r_tag, s2_entry_vec(0).addr)
+        val refill_s2_hit = refill_s2_valid && refill_s2_hit_vec.orR
+        when (refill_s2_valid) {
+          printf("refill_s2_hit: %x on set: %d, tag: %d\n", refill_s2_hit_vec.asUInt, v_idx, v_tag)
+        }
 
-        val mask = UIntToOH(v_idx)
-        printf("Mask: %x\n", mask)
-        for (way <- 0 until boomParams.nL2HTLBWays) {
-          when(wmask(way)) {
-            valid(way) := valid(way) | mask
+        when (!refill_s2_hit) {
+          val v_valid_vec = valid.map(_(v_idx)).asUInt
+          val v_valid_vec_q = Reg(UInt(boomParams.nL2HTLBWays.W))
+        
+          // replacement way
+          val v_l2_plru_way = Reg(UInt(log2Ceil(boomParams.nL2HTLBWays max 1).W))
+          v_valid_vec_q := v_valid_vec
+          v_l2_plru_way := (if (boomParams.nL2HTLBWays > 1) l2_plru.way(v_idx)
+                            else 0.U)
+
+          val entry = Wire(new L2HTLBEntry(nL2HTLBSets))
+          entry.try_phys := v_hte.try_phys
+          entry.addr := v_hte.addr
+          entry.tag := v_tag
+          // if all the way are valid, use plru to select one way to be replaced,
+          // otherwise use PriorityEncoderOH to select one
+          val wmask =
+            if (boomParams.nL2HTLBWays > 1)
+              Mux(
+                v_valid_vec_q.andR,
+                UIntToOH(v_l2_plru_way, boomParams.nL2HTLBWays),
+                PriorityEncoderOH(~v_valid_vec_q)
+              )
+            else 1.U(1.W)
+          ram.write(
+            v_idx,
+            VecInit(Seq.fill(boomParams.nL2HTLBWays)(code.encode(entry.asUInt))),
+            wmask.asBools
+          )
+          midas.targetutils.SynthesizePrintf(printf("[HTW] Inserting with addr: %x into set %d, way (%x) %d (tag)\n", entry.addr, v_idx, wmask, v_tag))
+
+          val mask = UIntToOH(v_idx)
+          printf("Mask: %x\n", mask)
+          for (way <- 0 until boomParams.nL2HTLBWays) {
+            when(wmask(way)) {
+              valid(way) := valid(way) | mask
+            }
           }
         }
       }
@@ -250,10 +278,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
       when(s2_hit) {
         printf("[HTW] s2_hit: %b\n", s2_hit_vec.asUInt)
-        val invl_mask = UIntToOH(r_idx)
-        for (way <- 0 until boomParams.nL2HTLBWays) {
-            valid(way) := valid(way) & ~invl_mask
-        }
+        // val invl_mask = UIntToOH(r_idx)
+        // for (way <- 0 until boomParams.nL2HTLBWays) {
+        //     valid(way) := valid(way) & ~invl_mask
+        // }
         assert((PopCount(s2_hit_vec) === 1.U) || s2_error, "L2 HTLB multi-hit")
       }
 
@@ -518,7 +546,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         next_state := s_wait3
       }
       is(s_victim) {
-        next_state := s_ready
+        next_state := ShiftRegister(s_ready, 3)
       }
       is(s_invalidated) {
         next_state := s_ready
