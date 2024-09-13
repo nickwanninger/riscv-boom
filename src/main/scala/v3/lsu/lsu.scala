@@ -694,8 +694,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   val exe_passthr= widthMap(w =>
                    Mux(will_fire_hella_incoming(w)  , hella_req.phys,
-                   Mux(!exe_htlb_miss(w), htlb.io.resp(w).phys,
-                                                      false.B)))
+                                                      false.B))
 
   for (w <- 0 until memWidth) {
     dtlb.io.req(w).valid            := exe_tlb_valid(w) && !exe_htlb_miss(w) // && !htlb.io.resp(w).phys
@@ -703,6 +702,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     dtlb.io.req(w).bits.size        := exe_size(w)
     dtlb.io.req(w).bits.cmd         := exe_cmd(w)
     dtlb.io.req(w).bits.passthrough := exe_passthr(w)
+    dtlb.io.req(w).bits.htlb_passthrough := Mux(!exe_htlb_miss(w), htlb.io.resp(w).phys, false.B)
     dtlb.io.req(w).bits.v           := io.ptw.status.v
     dtlb.io.req(w).bits.prv         := io.ptw.status.prv
 
@@ -765,11 +765,11 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     xcpt_found = xcpt_found || mem_xcpt_valids(w)
     oldest_xcpt_rob_idx = Mux(is_older, mem_xcpt_uops(w).rob_idx, oldest_xcpt_rob_idx)
   }
-  val exe_tlb_miss  = widthMap(w => (dtlb.io.req(w).valid && (dtlb.io.resp(w).miss || !dtlb.io.req(w).ready)))
+  val exe_tlb_miss  = widthMap(w => exe_htlb_miss(w) || (dtlb.io.req(w).valid && (dtlb.io.resp(w).miss || !dtlb.io.req(w).ready)))
   val exe_tlb_paddr = widthMap(w => Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits), exe_tlb_vaddr(w)(corePgIdxBits-1,0)))
   val exe_tlb_uncacheable = widthMap(w => !(dtlb.io.resp(w).cacheable))
 
-  val small_handle_criterium = widthMap(w => !exe_htlb_passthr(w) && !exe_passthr(w) && htlb.io.resp(w).try_phys)
+  val small_handle_criterium = widthMap(w => !exe_htlb_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).try_phys)
 
   for (w <- 0 until memWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr || exe_req(w).bits.sfence.valid, "[lsu] paddrs should match.")
@@ -782,7 +782,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     when (!exe_htlb_miss(w) && !exe_tlb_miss(w)) {
       printf("exe_tlb_paddr(%d): %x, htlb: %x, vaddr: %x\n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr, exe_tlb_vaddr(w))
     }
-    htlb.io.tlb(w).valid := !exe_htlb_miss(w) && !exe_tlb_miss(w) && small_handle_criterium(w)
+    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w)
     htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)
     htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w)
 
@@ -837,14 +837,14 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     io.dmem.s1_kill(w) := false.B
 
     when (will_fire_load_incoming(w)) {
-      dmem_req(w).valid      := (!((exe_tlb_miss(w) || exe_passthr(w)) && exe_htlb_miss(w))) && !exe_tlb_uncacheable(w)
+      dmem_req(w).valid      := !exe_tlb_miss(w) && !exe_tlb_uncacheable(w)
       dmem_req(w).bits.addr  := exe_tlb_paddr(w)
       dmem_req(w).bits.uop   := exe_tlb_uop(w)
 
       s0_executing_loads(ldq_incoming_idx(w)) := dmem_req_fire(w)
       assert(!ldq_incoming_e(w).bits.executed)
     } .elsewhen (will_fire_load_retry(w)) {
-      dmem_req(w).valid      := (!((exe_tlb_miss(w) || exe_passthr(w)) && exe_htlb_miss(w))) && !exe_tlb_uncacheable(w)
+      dmem_req(w).valid      := !exe_tlb_miss(w) && !exe_tlb_uncacheable(w)
       dmem_req(w).bits.addr  := exe_tlb_paddr(w)
       dmem_req(w).bits.uop   := exe_tlb_uop(w)
 
@@ -909,10 +909,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     {
       val ldq_idx = Mux(will_fire_load_incoming(w), ldq_incoming_idx(w), ldq_retry_idx)
       ldq(ldq_idx).bits.addr.valid          := true.B
-      ldq(ldq_idx).bits.addr.bits           := Mux(exe_htlb_miss(w), exe_htlb_vaddr(w), Mux(exe_tlb_miss(w) && !exe_passthr(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)))
+      ldq(ldq_idx).bits.addr.bits           := Mux(exe_htlb_miss(w), exe_htlb_vaddr(w), Mux(exe_tlb_miss(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)))
       ldq(ldq_idx).bits.uop.pdst            := exe_tlb_uop(w).pdst
-      ldq(ldq_idx).bits.addr_is_virtual     := (exe_tlb_miss(w) && !exe_passthr(w)) || exe_htlb_miss(w)
-      ldq(ldq_idx).bits.addr_is_uncacheable := exe_tlb_uncacheable(w) && !(exe_tlb_miss(w) && exe_htlb_miss(w))
+      ldq(ldq_idx).bits.addr_is_virtual     := exe_tlb_miss(w)
+      ldq(ldq_idx).bits.addr_is_uncacheable := exe_tlb_uncacheable(w) && !exe_tlb_miss(w)
 
       assert(!(will_fire_load_incoming(w) && ldq_incoming_e(w).bits.addr.valid),
         "[lsu] Incoming load is overwriting a valid address")
@@ -924,9 +924,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         stq_incoming_idx(w), stq_retry_idx)
 
       stq(stq_idx).bits.addr.valid := !pf_st(w) // Prevent AMOs from executing!
-      stq(stq_idx).bits.addr.bits  := Mux(exe_htlb_miss(w), exe_htlb_vaddr(w), Mux(exe_tlb_miss(w) && !exe_passthr(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)))
+      stq(stq_idx).bits.addr.bits  := Mux(exe_htlb_miss(w), exe_htlb_vaddr(w), Mux(exe_tlb_miss(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)))
       stq(stq_idx).bits.uop.pdst   := exe_tlb_uop(w).pdst // Needed for AMOs
-      stq(stq_idx).bits.addr_is_virtual := (exe_tlb_miss(w) && !exe_passthr(w)) || exe_htlb_miss(w)
+      stq(stq_idx).bits.addr_is_virtual := exe_tlb_miss(w)
 
       assert(!(will_fire_sta_incoming(w) && stq_incoming_e(w).bits.addr.valid),
         "[lsu] Incoming store is overwriting a valid address")
@@ -995,7 +995,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val mem_stdf_uop         = RegNext(UpdateBrMask(io.core.brupdate, io.core.fp_stdata.bits.uop))
 
 
-  val mem_tlb_miss             = RegNext(widthMap(w => exe_tlb_miss(w) || exe_htlb_miss(w)))
+  val mem_tlb_miss             = RegNext(exe_tlb_miss)
   val mem_tlb_uncacheable      = RegNext(exe_tlb_uncacheable)
   val mem_paddr                = RegNext(widthMap(w => dmem_req(w).bits.addr))
 

@@ -387,6 +387,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   tlb.io.req.bits.cmd   := DontCare
   tlb.io.req.bits.vaddr := s1_vpc
   tlb.io.req.bits.passthrough := false.B
+  tlb.io.req.bits.htlb_passthrough := false.B
   tlb.io.req.bits.size  := log2Ceil(coreInstBytes * fetchWidth).U
   tlb.io.req.bits.v     := io.ptw.status.v
   tlb.io.req.bits.prv   := io.ptw.status.prv

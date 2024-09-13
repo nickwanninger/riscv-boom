@@ -138,7 +138,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   val priv = if (instruction) io.ptw.status.prv else io.ptw.status.dprv
   val priv_s = priv(0)
   val priv_uses_vm = priv <= PRV.S.U
-  val vm_enabled = widthMap(w => usingVM.B && io.ptw.ptbr.mode(io.ptw.ptbr.mode.getWidth-1) && priv_uses_vm && !io.req(w).bits.passthrough)
+  val vm_enabled = widthMap(w => usingVM.B && io.ptw.ptbr.mode(io.ptw.ptbr.mode.getWidth-1) && priv_uses_vm && !io.req(w).bits.passthrough && !io.req(w).bits.htlb_passthrough)
 
   // share a single physical memory attribute checker (unshare if critical path)
   val vpn = widthMap(w => io.req(w).bits.vaddr(vaddrBits-1, pgIdxBits))
