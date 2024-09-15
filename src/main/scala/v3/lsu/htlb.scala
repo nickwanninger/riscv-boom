@@ -277,7 +277,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   // Refill L1 HTLB once L2 HTLB responds
   when(do_refill) {
     val newEntry = Wire(new HTLBEntryData)
-    newEntry.phys := false.B
+    newEntry.phys := io.htw.resp.bits.hte.phys
     newEntry.addr := io.htw.resp.bits.hte.addr
     newEntry.try_phys := io.htw.resp.bits.hte.try_phys
 

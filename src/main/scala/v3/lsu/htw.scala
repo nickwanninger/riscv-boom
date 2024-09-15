@@ -17,8 +17,9 @@ import freechips.rocketchip.tilelink.TLMessages.c
 import freechips.rocketchip.diplomacy.BufferParams.pipe
 
 class HTE(implicit p: Parameters) extends BoomBundle()(p) {
+  val phys = Bool()
   val try_phys = Bool()
-  val reserved = UInt((64 - maxSVAddrBits - 1).W)
+  val reserved = UInt((64 - maxSVAddrBits - 2).W)
   val addr = UInt(maxSVAddrBits.W)
 }
 
@@ -27,6 +28,7 @@ class L2HTLBEntry(nSets: Int)(implicit p: Parameters) extends BoomBundle()(p) {
   val tagBits = handleBits - idxBits
   val tag = UInt(tagBits.W)
   val try_phys = Bool()
+  val phys = Bool()
   val addr = UInt(maxSVAddrBits.W)
 }
 
@@ -224,6 +226,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           entry.try_phys := v_hte.try_phys
           entry.addr := v_hte.addr
           entry.tag := v_tag
+          entry.phys := v_hte.phys
           // if all the way are valid, use plru to select one way to be replaced,
           // otherwise use PriorityEncoderOH to select one
           val wmask =
@@ -290,6 +293,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       s2_hte.addr := s2_hit_entry.addr
       s2_hte.reserved := 0.U
       s2_hte.try_phys := s2_hit_entry.try_phys
+      s2_hte.phys := s2_hit_entry.phys
 
       for (way <- 0 until boomParams.nL2HTLBWays) {
         ccover(
@@ -383,6 +387,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         ds2_hte.addr := ds2_hit_entry.addr
         ds2_hte.tag := ds2_hit_entry.tag
         ds2_hte.try_phys := DontCare
+        ds2_hte.phys := DontCare
 
         when(ds2_hit && dr_valid_vec(way)) {
           d_hid := Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx(idxBits-1,0))
@@ -496,6 +501,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val tmp = mem_resp_data.asTypeOf(new HTE())
     val pte = WireDefault(tmp)
     pte.try_phys := true.B
+    pte.phys := false.B
     when(mem_resp_valid && state === s_wait3) {
       midas.targetutils.SynthesizePrintf(printf(
         "[HTW] Found HTE - Frozen: Reserved: %x, Addr: %x, try_phys: %d\n",
@@ -525,6 +531,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         v_hid := Mux(io.requestor.evict.valid, io.requestor.evict.bits.hid, 0.U)
         v_hte.addr := Mux(io.requestor.evict.valid, io.requestor.evict.bits.addr, 0.U)
         v_hte.try_phys := Mux(io.requestor.evict.valid, io.requestor.evict.bits.try_phys, false.B)
+        v_hte.phys := Mux(io.requestor.evict.valid, io.requestor.evict.bits.phys, false.B)
         v_hte.reserved := Mux(io.requestor.evict.valid, 0.U, 0.U)
       }
       is(s_req) {
