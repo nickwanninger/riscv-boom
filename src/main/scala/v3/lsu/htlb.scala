@@ -105,7 +105,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val entries = Reg(Vec(cfg.nSets, Vec(cfg.nWays, new Entry(cfg.nSets))))
 
   // State Machine
-  val s_ready :: s_request :: s_wait :: s_wait_invalidate :: s_victim_wait :: s_dumping :: s_dumping_wait :: s_dumped :: Nil = Enum(8)
+  val s_ready :: s_request :: s_wait :: s_wait_invalidate :: s_victim_req :: s_victim_wait :: s_dumping :: s_dumping_wait :: s_dumped :: Nil = Enum(9)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   state := Mux(io.htBase.orR, OptimizationBarrier(next_state), s_ready)
@@ -178,7 +178,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     ))
   }
 
-  io.htw.evict.valid := state === s_victim_wait && !io.htw.evict_resp
+  io.htw.evict.valid := state === s_victim_req
   io.htw.evict.bits.hid := vic_hid
   io.htw.evict.bits.addr := vic.addr
   io.htw.evict.bits.phys := vic.phys
@@ -303,11 +303,15 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val e = entries(r_idx)(repl_way)
     // printf("[HTLB] Replacing Entry: Valid: %d, Tag: %d, Addr: %x, Phys: %d\n", e.valid, e.tag, e.getData().addr, e.getData().phys)
     // make a copy of the victim entry, and set the victim flag to notify the L2 HTLB
-    state := Mux(e.valid, s_victim_wait, s_ready)
+    state := Mux(e.valid, s_victim_req, s_ready)
     victim_entry := e
     vic_hid := Cat(e.tag, r_idx)
     // e.invalidate()
     e.insert(r_tag, newEntry)
+  }
+
+  when (state === s_victim_req) {
+    next_state := Mux(io.htw.evict.ready, s_victim_wait, s_victim_req)
   }
 
   when(state === s_victim_wait && io.htw.evict_resp) {
@@ -408,9 +412,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   set_idx := Mux(set_idx_update, set_idx + 1.U, 
                      Mux(state === s_dumping_wait && way_idx === boomParams.nL1HTLBWays.U, d_hid(idxBits-1,0) + 1.U, 
                          Mux(set_clear, 0.U, set_idx)))
-  // printf("set_idx: %d, way_idx: %d\n", set_idx, way_idx)
-
-
 
   io.htw.l1miss := do_refill || htlb_miss.orR
   when(io.htw.l1miss) {
