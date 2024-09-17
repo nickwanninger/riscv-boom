@@ -783,8 +783,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       printf("exe_tlb_paddr(%d): %x, htlb: %x, vaddr: %x\n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr, exe_tlb_vaddr(w))
     }
     htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w)
-    htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)
-    htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w)
+    htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)(xLen-2, handleOffsetBits)
+    htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w) - exe_htlb_vaddr(w)(handleBits - 1, 0)
 
     when (mem_xcpt_valids(w))
     {

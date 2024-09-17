@@ -41,7 +41,7 @@ class HTWResp(implicit p: Parameters) extends BoomBundle()(p) {
 }
 
 class EvictionReq(implicit p: Parameters) extends BoomBundle()(p) {
-  val addr = UInt(xLen.W)
+  val addr = UInt(maxSVAddrBits.W)
   val try_phys = Bool()
   val phys = Bool()
   val hid = UInt(handleBits.W)
