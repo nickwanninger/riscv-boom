@@ -106,7 +106,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val entries = Reg(Vec(cfg.nSets, Vec(cfg.nWays, new Entry(cfg.nSets))))
 
   // State Machine
-  val s_ready :: s_request :: s_wait :: s_victim_req :: s_victim_wait :: s_dumping :: s_dumping_wait :: s_dumped :: Nil = Enum(8)
+  val s_ready :: s_request :: s_wait :: s_victim_req :: s_victim_wait :: s_dump :: s_dump_req :: s_dump_wait :: s_dumped :: Nil = Enum(9)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   state := Mux(io.htBase.orR, OptimizationBarrier(next_state), s_ready)
@@ -147,22 +147,22 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   io.htw.req.bits.valid := !io.kill
   io.htw.req.bits.bits.hid := hid_req
   
-  for (s <- 0 until cfg.nSets) {
-    printf("[HTLB] Set %d\n", s.U)
-    for (w <- 0 until cfg.nWays) {
-      when(entries(s)(w).valid) {
-        val entry = entries(s)(w).data.asTypeOf(new HTLBEntryData)
-        printf(
-          "[HTLB] Entry %d: %d,  %x, %x (%d)\n",
-          w.U,
-          entries(s)(w).valid,
-          entries(s)(w).tag,
-          entry.addr,
-          entry.phys
-        )
-      }
-    }
-  }
+  // for (s <- 0 until cfg.nSets) {
+  //   printf("[HTLB] Set %d\n", s.U)
+  //   for (w <- 0 until cfg.nWays) {
+  //     when(entries(s)(w).valid) {
+  //       val entry = entries(s)(w).data.asTypeOf(new HTLBEntryData)
+  //       printf(
+  //         "[HTLB] Entry %d: %d,  %x, %x (%d)\n",
+  //         w.U,
+  //         entries(s)(w).valid,
+  //         entries(s)(w).tag,
+  //         entry.addr,
+  //         entry.phys
+  //       )
+  //     }
+  //   }
+  // }
 
   for (w <- 0 until memWidth) {
     when(io.req(w).valid && hm_enabled(w)) {
@@ -300,15 +300,15 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val hid_to_dump = RegInit(0.U(handleBits.W))
   val hit = WireDefault(false.B)
 
-  val way_idx_update = (state === s_dumping && !hit) || (state === s_dumping_wait && mem_resp_valid)
-  val set_idx_update = way_idx === cfg.nWays.U && state === s_dumping
-  // printf("way_idx_update: %d, set_idx_update: %d\n", way_idx_update, set_idx_update)
+  val way_idx_update = (state === s_dump && !hit) || (state === s_dump_wait && mem_resp_valid)
+  val set_idx_update = way_idx === cfg.nWays.U && state === s_dump
+  printf("way_idx_update: %d, set_idx_update: %d\n", way_idx_update, set_idx_update)
 
-  val way_clear = set_idx_update || (state === s_dumping_wait && way_idx === boomParams.nL1HTLBWays.U) || (state === s_ready && next_state === s_dumping)
-  val set_clear = (state === s_ready && next_state === s_dumping)
-  // printf("way_clear: %d, set_clear: %d\n", way_clear, set_clear)
+  val way_clear = set_idx_update || (state === s_dump_req && way_idx === boomParams.nL1HTLBWays.U) || (state === s_ready && next_state === s_dump)
+  val set_clear = (state === s_ready && next_state === s_dump)
+  printf("way_clear: %d, set_clear: %d\n", way_clear, set_clear)
 
-  when (set_idx < cfg.nSets.U && way_idx < cfg.nWays.U && state === s_dumping) {
+  when (set_idx < cfg.nSets.U && way_idx < cfg.nWays.U && state === s_dump) {
     val way = l1_plru.way(set_idx(idxBits-1,0))
     printf("[HTLB] Dumping L1 Entry %d, %d\n", set_idx, way)
 
@@ -325,15 +325,16 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         // entry.immovable
       ))
       hid_to_dump := Cat(entries(set_idx(idxBits-1,0))(way).tag, set_idx(idxBits - 1, 0))
-      state := s_dumping_wait
+      state := s_dump_req
     }
     l1_plru.access(set_idx(idxBits-1,0), way)
   }
 
   way_idx := Mux(way_clear, 0.U, Mux(way_idx_update, way_idx + 1.U, way_idx))
   set_idx := Mux(set_idx_update, set_idx + 1.U, 
-                     Mux(state === s_dumping_wait && way_idx === boomParams.nL1HTLBWays.U, hid_to_dump(idxBits-1,0) + 1.U, 
+                     Mux(state === s_dump_req && way_idx === boomParams.nL1HTLBWays.U, hid_to_dump(idxBits-1,0) + 1.U, 
                          Mux(set_clear, 0.U, set_idx)))
+  printf("set_idx: %d, way_idx: %d\n", set_idx, way_idx)
 
   io.htw.l1miss := do_refill || htlb_miss.orR
   when(io.htw.l1miss) {
@@ -343,7 +344,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val hte_dest_addr = io.htDump + dumped_entry_idx*8.U
 
   io.mem.keep_clock_enabled := false.B
-  io.mem.req.valid := state === s_dumping_wait && !mem_resp_valid
+  io.mem.req.valid := state === s_dump_req
   io.mem.req.bits.phys := false.B
   io.mem.req.bits.cmd := M_XWR
   io.mem.req.bits.size := log2Ceil(xLen/8).U
@@ -360,21 +361,21 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   io.mem.req.bits.mask := DontCare
 
   // printf("io.mem.req.valid: %d, s1_kill: %d\n", io.mem.req.valid, io.mem.s1_kill)
-  val replay_htlb_dump_req = io.ptw_access && io.mem.req.valid
+  val replay_htlb_dump_req = io.ptw_access
   when (replay_htlb_dump_req) {
     midas.targetutils.SynthesizePrintf(printf("[HTLB] Replaying HTLB Dump\n"))
   }
 
-  io.mem.s1_kill := state =/= s_dumping_wait || replay_htlb_dump_req
+  io.mem.s1_kill := state =/= s_dump_wait || replay_htlb_dump_req
   io.mem.s1_data.data := hid_to_dump
   io.mem.s1_data.mask := ((1 << coreDataBytes) - 1).U
   io.mem.s2_kill := false.B // replay_htlb_dump_req
 
   switch (state) {
     is (s_ready) {
-      next_state := Mux(io.htDump.orR, s_dumping, s_ready)
+      next_state := Mux(io.htDump.orR, s_dump, s_ready)
 
-      when (next_state === s_dumping) {
+      when (next_state === s_dump) {
         midas.targetutils.SynthesizePrintf(printf("[HTLB] Dumping L1 Entries\n"))
         dumped_entry_idx := 0.U
       }
@@ -398,17 +399,23 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     is (s_victim_wait) {
       next_state := Mux(io.htw.evict_resp, s_ready, s_victim_wait)
     }
-    is (s_dumping_wait) {
+    is (s_dump_req) {
+      midas.targetutils.SynthesizePrintf(printf("[HTLB] Trying to dump L1 Entry %d to %x\n", hid_to_dump, hte_dest_addr))
+      next_state := Mux(io.mem.req.fire, s_dump_wait, s_dump_req)
+    }
+    is (s_dump_wait) {
       midas.targetutils.SynthesizePrintf(printf("[HTLB] Dumping L1 Entry %d to %x\n", hid_to_dump, hte_dest_addr))
-      next_state := Mux(mem_resp_valid, s_dumping, s_dumping_wait)
+      next_state := Mux(mem_resp_valid, s_dump, Mux(replay_htlb_dump_req, s_dump_req, Mux(io.mem.s2_nack, s_dump_req, s_dump_wait)))
       dumped_entry_idx := Mux(mem_resp_valid, dumped_entry_idx + 1.U, dumped_entry_idx)
 
-      when (next_state === s_dumping) {
+      when (next_state === s_dump) {
         midas.targetutils.SynthesizePrintf(printf("[HTLB] Dumped %d-th L1 Entry %d\n", dumped_entry_idx, hid_to_dump))
+      } .elsewhen (next_state === s_dump_req) {
+        midas.targetutils.SynthesizePrintf(printf("[HTLB] Replaying %d-th L1 Entry %d\n", dumped_entry_idx, hid_to_dump))
       }
     }
-    is (s_dumping) {
-      next_state := Mux(set_idx === cfg.nSets.U && way_idx === cfg.nWays.U, s_dumped, s_dumping)
+    is (s_dump) {
+      next_state := Mux(set_idx === cfg.nSets.U && way_idx === cfg.nWays.U, s_dumped, s_dump)
       when (next_state === s_dumped) {
         midas.targetutils.SynthesizePrintf(printf("[HTLB] Done dumping!!!\n"))
       }
