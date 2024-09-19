@@ -304,8 +304,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val set_idx_update = way_idx === cfg.nWays.U && state === s_dump
   printf("way_idx_update: %d, set_idx_update: %d\n", way_idx_update, set_idx_update)
 
-  val way_clear = set_idx_update || (state === s_dump_req && way_idx === boomParams.nL1HTLBWays.U) || (state === s_ready && next_state === s_dump)
-  val set_clear = (state === s_ready && next_state === s_dump)
+  val way_clear = set_idx_update || (state === s_dump_req && way_idx === boomParams.nL1HTLBWays.U) || (state === s_dump && next_state === s_ready)
+  val set_clear = (state === s_dump && next_state === s_ready)
   printf("way_clear: %d, set_clear: %d\n", way_clear, set_clear)
 
   when (set_idx < cfg.nSets.U && way_idx < cfg.nWays.U && state === s_dump) {
@@ -341,7 +341,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     printf("[HTLB] L1 Miss\n")
   }
 
-  val hte_dest_addr = io.htDump + dumped_entry_idx*8.U
+  val hte_dst_addr = io.htDump + dumped_entry_idx*8.U
 
   io.mem.keep_clock_enabled := false.B
   io.mem.req.valid := state === s_dump_req
@@ -349,8 +349,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   io.mem.req.bits.cmd := M_XWR
   io.mem.req.bits.size := log2Ceil(xLen/8).U
   io.mem.req.bits.signed := false.B
-  io.mem.req.bits.addr := hte_dest_addr
-  io.mem.req.bits.idx.foreach(_ := hte_dest_addr) // TODO: huh?
+  io.mem.req.bits.addr := hte_dst_addr
+  io.mem.req.bits.idx.foreach(_ := hte_dst_addr) // TODO: huh?
   io.mem.req.bits.dprv := PRV.U.U // HTW accesses are U-mode by definition
   io.mem.req.bits.dv := false.B
   io.mem.req.bits.tag := DontCare
@@ -400,11 +400,11 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       next_state := Mux(io.htw.evict_resp, s_ready, s_victim_wait)
     }
     is (s_dump_req) {
-      midas.targetutils.SynthesizePrintf(printf("[HTLB] Trying to dump L1 Entry %d to %x\n", hid_to_dump, hte_dest_addr))
+      midas.targetutils.SynthesizePrintf(printf("[HTLB] Trying to dump L1 Entry %d to %x\n", hid_to_dump, hte_dst_addr))
       next_state := Mux(io.mem.req.fire, s_dump_wait, s_dump_req)
     }
     is (s_dump_wait) {
-      midas.targetutils.SynthesizePrintf(printf("[HTLB] Dumping L1 Entry %d to %x\n", hid_to_dump, hte_dest_addr))
+      midas.targetutils.SynthesizePrintf(printf("[HTLB] Dumping L1 Entry %d to %x\n", hid_to_dump, hte_dst_addr))
       next_state := Mux(mem_resp_valid, s_dump, Mux(replay_htlb_dump_req, s_dump_req, Mux(io.mem.s2_nack, s_dump_req, s_dump_wait)))
       dumped_entry_idx := Mux(mem_resp_valid, dumped_entry_idx + 1.U, dumped_entry_idx)
 

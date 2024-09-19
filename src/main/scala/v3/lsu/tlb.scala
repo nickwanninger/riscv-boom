@@ -291,7 +291,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
 
   io.miss_rdy := state === s_ready
   for (w <- 0 until memWidth) {
-    when (!io.resp(w).miss) {
+    when (!io.resp(w).miss && io.req(w).fire) {
       printf("[TLB] -> [LSU] req[%d]: vaddr=0x%x paddr=0x%x size=%d cmd=%d\n",
         w.U, io.req(w).bits.vaddr, io.resp(w).paddr, io.req(w).bits.size, io.req(w).bits.cmd)
     }

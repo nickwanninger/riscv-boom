@@ -779,9 +779,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     }
 
     // debug for printing paddr for small handle optimization
-    when (!exe_htlb_miss(w) && !exe_tlb_miss(w)) {
-      printf("exe_tlb_paddr(%d): %x, htlb: %x, vaddr: %x\n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr, exe_tlb_vaddr(w))
-    }
+    // when (!exe_htlb_miss(w) && !exe_tlb_miss(w)) {
+    //   printf("exe_tlb_paddr(%d): %x, htlb: %x, vaddr: %x\n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr, exe_tlb_vaddr(w))
+    // }
     htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w)
     htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)(xLen-2, handleOffsetBits)
     htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w) - exe_htlb_vaddr(w)(handleBits - 1, 0)
@@ -1606,6 +1606,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     when (io.hellacache.req.fire) {
       hella_req   := io.hellacache.req.bits
       hella_state := h_s1
+      // printf("[LSU] HellaCache request: %x\n", hella_req.addr)
     }
   } .elsewhen (hella_state === h_s1) {
     can_fire_hella_incoming(memWidth-1) := true.B
@@ -1620,11 +1621,13 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         hella_state := h_ready
       }
     } .elsewhen (will_fire_hella_incoming(memWidth-1) && dmem_req_fire(memWidth-1)) {
+      // printf("[LSU] HellaCache S1 fired\n")
       hella_state := h_s2
     } .otherwise {
       hella_state := h_s2_nack
     }
   } .elsewhen (hella_state === h_s2_nack) {
+    // printf("[LSU] HellaCache S2 Nacked\n")
     io.hellacache.s2_nack := true.B
     hella_state := h_ready
   } .elsewhen (hella_state === h_s2) {
@@ -1635,8 +1638,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       hella_state := h_wait
     }
   } .elsewhen (hella_state === h_wait) {
+    // printf("[LSU] HellaCache waiting\n")
     for (w <- 0 until memWidth) {
       when (io.dmem.resp(w).valid && io.dmem.resp(w).bits.is_hella) {
+        // printf("[LSU] HellaCache resp recvd\n")
         hella_state := h_ready
 
         io.hellacache.resp.valid       := true.B
@@ -1651,12 +1656,14 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       }
     }
   } .elsewhen (hella_state === h_replay) {
+    // printf("[LSU] HellaCache waking up\n")
     can_fire_hella_wakeup(memWidth-1) := true.B
 
     when (will_fire_hella_wakeup(memWidth-1) && dmem_req_fire(memWidth-1)) {
       hella_state := h_wait
     }
   } .elsewhen (hella_state === h_dead) {
+    // printf("[LSU] HellaCache dead\n")
     for (w <- 0 until memWidth) {
       when (io.dmem.resp(w).valid && io.dmem.resp(w).bits.is_hella) {
         hella_state := h_ready
