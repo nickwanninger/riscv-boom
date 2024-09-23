@@ -77,20 +77,19 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val requestor = Flipped(new HTLBHTWIO)
     val mem = new HellaCacheIO
     val dpath = new DatapathHTWIO
-    val ptw_access = Input(Bool())
+    val ptw_done = Input(Bool())
   })
   io.dpath.customCSRs := DontCare
   io.dpath.perf.l1miss := io.requestor.l1miss
 
   // State Machine
-  val s_ready :: s_req :: s_wait1 :: s_wait2 :: s_wait3 :: s_victim :: s_dump :: s_dump_req :: s_dump_wait :: s_invalidating :: s_invalidated :: Nil = Enum(11)
+  val s_ready :: s_req :: s_wait1 :: s_wait2 :: s_wait3 :: s_victim1 :: s_victim2 :: s_victim3 :: s_dump :: s_dump_req :: s_dump_wait :: s_invalidating :: s_invalidated :: s_htw_replay_pending :: s_dump_replay_pending :: Nil = Enum(15)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   val l2_refill_wire = Wire(Bool())
   state := Mux(io.dpath.customCSRs.htBase =/= 0.U, OptimizationBarrier(next_state), s_ready)
 
   val resp_valid = RegNext(RegInit(false.B))
-  val replay_htw_req = io.ptw_access
 
   val clock_en =
     state =/= s_ready || l2_refill_wire || io.requestor.req.valid || io.dpath.customCSRs.disableDCacheClockGate
@@ -104,13 +103,13 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     val l2_refill = RegNext(false.B)
     l2_refill_wire := l2_refill
-    l2_refill := state === s_victim
+    l2_refill := state === s_victim1 || state === s_victim2 || state === s_victim3
 
     io.requestor.req.ready := (state === s_ready) && !l2_refill_wire
 
     // Victim Cache Logic
     io.requestor.evict.ready := state === s_ready
-    io.requestor.evict_resp := l2_refill
+    io.requestor.evict_resp := state =/= s_victim2 && next_state === s_ready
 
     // Handle HTW Responses
     val mem_resp_valid = RegNext(io.mem.resp.valid)
@@ -473,7 +472,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         next_state := Mux(
           io.requestor.req.valid,
           s_req,
-          Mux(io.requestor.evict.valid, s_victim, 
+          Mux(io.requestor.evict.valid, s_victim1, 
           Mux(io.requestor.l1_dumped && io.dpath.customCSRs.htDump.orR, s_dump,
           Mux(io.dpath.customCSRs.htInval.orR, s_invalidating, 
           s_ready)
@@ -486,7 +485,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         }
       }
       is(s_req) {
-        next_state := Mux(io.mem.req.ready, s_wait1, s_req)
+        next_state := Mux(io.mem.req.fire, s_wait1, s_req)
         midas.targetutils.SynthesizePrintf(printf(
           "[HTW] -> [Mem] Looking up HID: %d at %x\n",
           (io.mem.req.bits.addr - io.dpath.customCSRs.htBase)/8.U(xLen.W),
@@ -497,10 +496,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         next_state := Mux(l2_hit, s_req, s_wait2)
       }
       is (s_wait2) {
-        next_state := Mux(io.mem.s2_nack, s_req, s_wait3)
+        next_state := Mux(io.mem.s2_nack, s_htw_replay_pending, s_wait3)
       }
       is (s_wait3) {
-        next_state := Mux(mem_resp_valid, s_ready, s_wait3)
+        next_state := Mux(mem_resp_valid, s_ready, Mux(io.mem.s2_nack, s_htw_replay_pending, s_wait3))
         resp_valid := mem_resp_valid
         when (mem_resp_valid) {
           midas.targetutils.SynthesizePrintf(printf(
@@ -511,9 +510,16 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           ))
         }
       }
-      is(s_victim) {
-        next_state := ShiftRegister(s_ready, 3)
+      is(s_victim1) {
+        next_state := s_victim2
         midas.targetutils.SynthesizePrintf(printf("[HTW] Inserting Victim Entry: HID: %d, Addr: %x, Phys: %d, try_phys: %d\n", victim_hte.hid, victim_hte.addr, victim_hte.phys, victim_hte.try_phys))
+      }
+      is(s_victim2) {
+        next_state := s_victim3
+      }
+      is(s_victim3) {
+        next_state := s_ready
+        midas.targetutils.SynthesizePrintf(printf("[HTW] Inserted Victim Entry: HID: %d, Addr: %x, Phys: %d, try_phys: %d\n", victim_hte.hid, victim_hte.addr, victim_hte.phys, victim_hte.try_phys))
       }
       is(s_invalidated) {
         midas.targetutils.SynthesizePrintf(printf("[HTW] Finished invalidating\n"))
@@ -532,22 +538,20 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
       is (s_dump_wait) {
         midas.targetutils.SynthesizePrintf(printf("[HTW] Dumping hid %x to %x (mem_resp_valid: %d)\n", hid_to_dump, hte_dst_addr, mem_resp_valid))
-        next_state := Mux(mem_resp_valid, s_dump, Mux(replay_htw_req, s_dump_req, Mux(io.mem.s2_nack, s_dump_req, s_dump_wait)))
+        next_state := Mux(mem_resp_valid, s_dump, Mux(io.mem.s2_nack, s_dump_replay_pending, s_dump_wait))
 
-        when (next_state === s_dump_req && replay_htw_req) {
-          midas.targetutils.SynthesizePrintf(printf("[HTW] Replaying HTW Access\n"))
-        }. elsewhen(next_state === s_dump_req && io.mem.s2_nack) {
-          midas.targetutils.SynthesizePrintf(printf("[HTW] NACKed\n"))
-        }
-
-        when (next_state === s_dump_req && replay_htw_req) {
-          midas.targetutils.SynthesizePrintf(printf("[HTW] Replaying HTW Access\n"))
-        }
-
-        when (next_state === s_dump) {
-          midas.targetutils.SynthesizePrintf(printf("[HTW] Finished dumping %d-th hid %x\n", dumped_entry_idx, hid_to_dump))
+        when (next_state === s_dump_replay_pending) {
+          midas.targetutils.SynthesizePrintf(printf("[HTW] Nacked, Pending dumping %d-th L2 Entry %d\n", dumped_entry_idx, hid_to_dump))
+        }. elsewhen(next_state === s_dump) {
+          midas.targetutils.SynthesizePrintf(printf("[HTW] Finished dumping %d-th L2 Entry %d\n", dumped_entry_idx, hid_to_dump))
           dumped_entry_idx := dumped_entry_idx + 1.U
         }
+      }
+      is (s_htw_replay_pending) {
+        next_state := Mux(io.ptw_done, s_req, s_htw_replay_pending)
+      }
+      is (s_dump_replay_pending) {
+        next_state := Mux(io.ptw_done, s_dump_req, s_dump_replay_pending)
       }
     }
         
@@ -590,7 +594,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.mem.req.bits.mask := DontCare
 
     // TODO: This may need to change if we get an exception in the middle of a handle table walk
-    io.mem.s1_kill := l2_hit || (state =/= s_wait1 && state =/= s_dump_wait) || replay_htw_req 
+    io.mem.s1_kill := l2_hit || (state =/= s_wait1 && state =/= s_dump_wait)
     io.mem.s1_data.data := Mux(state === s_dump_wait, hid_to_dump, 0.U)
     io.mem.s1_data.mask := Mux(state === s_dump_wait, ((1 << coreDataBytes) - 1).U, 0.U)
     io.mem.s2_kill := false.B

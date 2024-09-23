@@ -171,7 +171,7 @@ class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
   val hellacache = Flipped(new freechips.rocketchip.rocket.HellaCacheIO)
 
   val htlb_mem = new rocket.HellaCacheIO
-  val ptw_access = Input(Bool())
+  val ptw_done = Input(Bool())
 }
 
 class LDQEntry(implicit p: Parameters) extends BoomBundle()(p)
@@ -268,7 +268,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   htlb.io.htDump <> io.core.htDump
   htlb.io.htInval <> io.core.htInval
   htlb.io.htBase <> io.core.htBase
-  htlb.io.ptw_access <> io.ptw_access
+  htlb.io.ptw_done <> io.ptw_done
   htlb.io.clear_htlb := io.core.clear_htlb
 
   // TODO: condition this on privilege level when we get to linux and running things not in S

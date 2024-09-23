@@ -25,7 +25,7 @@ class HTLBResp(implicit p: Parameters) extends BoomBundle()(p) {
   val try_phys = Bool()
 }
 
-class TLBResp(implicit p: Parameters) extends BoomBundle()(p) {
+class TLBHTLBResp(implicit p: Parameters) extends BoomBundle()(p) {
   val hid = UInt(handleBits.W)
   val paddr = UInt(maxSVAddrBits.W)
 }
@@ -40,13 +40,13 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val req = Flipped(Vec(memWidth, Decoupled(new HTLBReq)))
     val resp = Vec(memWidth, new HTLBResp)
     val htw = new HTLBHTWIO
-    val tlb = Flipped(Vec(memWidth, Valid(new TLBResp)))
+    val tlb = Flipped(Vec(memWidth, Valid(new TLBHTLBResp)))
     val mem = new HellaCacheIO
     val htDump = Input(UInt(maxSVAddrBits.W))
     val htInval = Input(UInt(handleBits.W))
     val htBase = Input(UInt(maxSVAddrBits.W))
     val kill = Input(Bool())
-    val ptw_access = Input(Bool())
+    val ptw_done = Input(Bool())
     val clear_htlb = Input(Bool())
   })
 
@@ -106,7 +106,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val entries = Reg(Vec(cfg.nSets, Vec(cfg.nWays, new Entry(cfg.nSets))))
 
   // State Machine
-  val s_ready :: s_request :: s_wait :: s_victim_req :: s_victim_wait :: s_dump :: s_dump_req :: s_dump_wait :: s_dumped :: Nil = Enum(9)
+  val s_ready :: s_request :: s_wait :: s_victim_req :: s_victim_wait :: s_dump :: s_dump_req :: s_dump_wait :: s_dumped :: s_dump_replay_pending :: Nil = Enum(10)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   state := Mux(io.htBase.orR, OptimizationBarrier(next_state), s_ready)
@@ -360,13 +360,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   io.mem.req.bits.data := DontCare
   io.mem.req.bits.mask := DontCare
 
-  // printf("io.mem.req.valid: %d, s1_kill: %d\n", io.mem.req.valid, io.mem.s1_kill)
-  val replay_htlb_dump_req = io.ptw_access
-  when (replay_htlb_dump_req) {
-    midas.targetutils.SynthesizePrintf(printf("[HTLB] Replaying HTLB Dump\n"))
-  }
-
-  io.mem.s1_kill := state =/= s_dump_wait || replay_htlb_dump_req
+  io.mem.s1_kill := false.B
   io.mem.s1_data.data := hid_to_dump
   io.mem.s1_data.mask := ((1 << coreDataBytes) - 1).U
   io.mem.s2_kill := false.B // replay_htlb_dump_req
@@ -381,7 +375,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       }
     }
     is (s_request) {
-      next_state := Mux(io.htw.req.ready, s_wait, s_request)
+      next_state := Mux(io.htw.req.fire, s_wait, s_request)
       when(io.htw.req.fire) {
         midas.targetutils.SynthesizePrintf(printf("[HTLB] -> [HTW] Looking up hid: %x\n", io.htw.req.bits.bits.hid))
       }
@@ -390,7 +384,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       next_state := Mux(io.htw.resp.valid, s_ready, s_wait)
     }
     is (s_victim_req) {
-      next_state := Mux(io.htw.evict.ready, s_victim_wait, s_victim_req)
+      next_state := Mux(io.htw.evict.fire, s_victim_wait, s_victim_req)
       midas.targetutils.SynthesizePrintf(printf("[HTLB] Victim Entry (%x): %x\n",
         victim_entry.hid,
         victim_entry.addr
@@ -405,13 +399,13 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
     is (s_dump_wait) {
       midas.targetutils.SynthesizePrintf(printf("[HTLB] Dumping L1 Entry %d to %x\n", hid_to_dump, hte_dst_addr))
-      next_state := Mux(mem_resp_valid, s_dump, Mux(replay_htlb_dump_req, s_dump_req, Mux(io.mem.s2_nack, s_dump_req, s_dump_wait)))
+      next_state := Mux(mem_resp_valid, s_dump, Mux(io.mem.s2_nack, s_dump_replay_pending, s_dump_wait))
       dumped_entry_idx := Mux(mem_resp_valid, dumped_entry_idx + 1.U, dumped_entry_idx)
 
       when (next_state === s_dump) {
         midas.targetutils.SynthesizePrintf(printf("[HTLB] Dumped %d-th L1 Entry %d\n", dumped_entry_idx, hid_to_dump))
       } .elsewhen (next_state === s_dump_req) {
-        midas.targetutils.SynthesizePrintf(printf("[HTLB] Replaying %d-th L1 Entry %d\n", dumped_entry_idx, hid_to_dump))
+        midas.targetutils.SynthesizePrintf(printf("[HTLB] Nacked, Pending dumping %d-th L1 Entry %d\n", dumped_entry_idx, hid_to_dump))
       }
     }
     is (s_dump) {
@@ -422,6 +416,12 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
     is (s_dumped) {
       next_state := Mux(!io.htDump.orR, s_ready, s_dumped)
+    }
+    is (s_dump_replay_pending) {
+      next_state := Mux(io.ptw_done, s_dump_req, s_dump_replay_pending)
+      when (next_state === s_dump_req) {
+        midas.targetutils.SynthesizePrintf(printf("[HTLB] Retrying dumping %d-th L1 Entry %d\n", dumped_entry_idx, hid_to_dump))
+      }
     }
   }
 
