@@ -38,6 +38,7 @@ class HTWReq(implicit p: Parameters) extends BoomBundle()(p) {
 
 class HTWResp(implicit p: Parameters) extends BoomBundle()(p) {
   val hte = new HTE
+  val ae_htw = Bool()
 }
 
 class EvictionReq(implicit p: Parameters) extends BoomBundle()(p) {
@@ -127,6 +128,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     // NOTE: we assume that the HTE will always be valid
     io.requestor.resp.valid := resp_valid
     io.requestor.resp.bits.hte := found_hte
+    io.requestor.resp.bits.ae_htw := false.B
 
     val nL2HTLBSets = boomParams.nL2HTLBEntries / boomParams.nL2HTLBWays
     val idxBits = log2Ceil(nL2HTLBSets)
@@ -171,7 +173,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         val (v_tag, v_idx) = Split(victim_hte.hid, idxBits)
         val refill_r_valid_vec = valid.map(_(v_idx)).asUInt
 
-        val refill_s0_valid = true.B
+        val refill_s0_valid = l2_refill
         val refill_s1_valid = RegNext(refill_s0_valid)
         val refill_s2_valid = RegNext(refill_s1_valid)
 
@@ -599,9 +601,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.mem.s1_data.mask := Mux(state === s_dump_wait, ((1 << coreDataBytes) - 1).U, 0.U)
     io.mem.s2_kill := false.B
 
-    // debug s1_kill causes
-    when(io.mem.s1_kill && !io.mem.req.valid) {
-      midas.targetutils.SynthesizePrintf(printf("[HTW] Killed %d, %d, l2_hit: %d, state: %d, replay: %d\n", io.mem.s1_kill, io.mem.s2_kill, l2_hit, state, replay_htw_req))
+    when (io.mem.s2_xcpt.asUInt =/= 0.U) {
+      midas.targetutils.SynthesizePrintf(printf("[HTW] Exception in HTW: %x\n", io.mem.s2_xcpt.asUInt))
+      io.requestor.resp.bits.ae_htw := true.B
     }
   }
 

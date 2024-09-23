@@ -112,7 +112,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   state := Mux(io.htBase.orR, OptimizationBarrier(next_state), s_ready)
 
   // Refill State
-  val do_refill = io.htw.resp.valid
+  val do_refill = io.htw.resp.valid && !io.htw.resp.bits.ae_htw && io.htw.resp.bits.hte.addr =/= 0.U
   val hid_req = Reg(UInt(handleBits.W))
 
   val l1_plru = new SetAssocLRU(cfg.nSets, cfg.nWays, "plru")
@@ -363,7 +363,12 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   io.mem.s1_kill := false.B
   io.mem.s1_data.data := hid_to_dump
   io.mem.s1_data.mask := ((1 << coreDataBytes) - 1).U
-  io.mem.s2_kill := false.B // replay_htlb_dump_req
+  io.mem.s2_kill := false.B
+
+  when (io.mem.s2_xcpt.asUInt =/= 0.U) {
+    midas.targetutils.SynthesizePrintf(printf("[HTLB] Exception in HTLB: %x\n", io.mem.s2_xcpt.asUInt))
+    // assert(io.mem.s2_xcpt.asUInt === 0.U, "HTLB dumping to memory failed?!?")
+  }
 
   switch (state) {
     is (s_ready) {
