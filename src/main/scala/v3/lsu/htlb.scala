@@ -367,6 +367,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   when (io.mem.s2_xcpt.asUInt =/= 0.U) {
     midas.targetutils.SynthesizePrintf(printf("[HTLB] Exception in HTLB: %x\n", io.mem.s2_xcpt.asUInt))
+    next_state := s_ready
     // assert(io.mem.s2_xcpt.asUInt === 0.U, "HTLB dumping to memory failed?!?")
   }
 

@@ -736,7 +736,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     Mux(pf_st(w), rocket.Causes.store_page_fault.U,
     Mux(ae_ld(w), rocket.Causes.load_access.U,
                   rocket.Causes.store_access.U)))))))
-  val mem_xcpt_vaddrs = RegNext(exe_tlb_vaddr)
+  val mem_xcpt_vaddrs = RegNext(exe_htlb_vaddr)
 
   for (w <- 0 until memWidth) {
     assert (!(dtlb.io.req(w).valid && exe_tlb_uop(w).is_fence), "Fence is pretending to talk to the TLB")
