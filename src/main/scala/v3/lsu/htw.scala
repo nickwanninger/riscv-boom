@@ -269,6 +269,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       when(io.dpath.perf.l2miss) {
         midas.targetutils.SynthesizePrintf(printf("[HTW] L2 Miss\n"))
       }
+      midas.targetutils.PerfCounter(io.dpath.perf.l2miss, "l2_htlb_miss", "L2 HTLB Miss")
 
       when(s2_hit) {
         assert((PopCount(s2_hit_vec) === 1.U) || s2_error, "L2 HTLB multi-hit")

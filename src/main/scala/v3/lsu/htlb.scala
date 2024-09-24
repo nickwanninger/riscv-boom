@@ -337,6 +337,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   printf("set_idx: %d, way_idx: %d\n", set_idx, way_idx)
 
   io.htw.l1miss := do_refill || htlb_miss.orR
+  midas.targetutils.PerfCounter(io.dpath.perf.l2miss, "l1_htlb_miss", "L1 HTLB Miss")
   when(io.htw.l1miss) {
     printf("[HTLB] L1 Miss\n")
   }
