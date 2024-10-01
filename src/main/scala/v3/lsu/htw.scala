@@ -473,8 +473,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     switch(state) {
       is(s_ready) {
         next_state := Mux(
-          io.requestor.req.valid,
-          s_req,
+          io.requestor.req.valid, s_req,
           Mux(io.requestor.evict.valid, s_victim1, 
           Mux(io.requestor.l1_dumped && io.dpath.customCSRs.htDump.orR, s_dump,
           Mux(io.dpath.customCSRs.htInval.orR, s_invalidating, 
@@ -604,7 +603,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     when (io.mem.s2_xcpt.asUInt =/= 0.U) {
       midas.targetutils.SynthesizePrintf(printf("[HTW] Exception in HTW: %x\n", io.mem.s2_xcpt.asUInt))
-      io.requestor.resp.bits.ae_htw := true.B
+      // io.requestor.resp.bits.ae_htw := true.B
       next_state := s_ready
     }
   }

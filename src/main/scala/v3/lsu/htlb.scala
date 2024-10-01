@@ -337,7 +337,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   printf("set_idx: %d, way_idx: %d\n", set_idx, way_idx)
 
   io.htw.l1miss := do_refill || htlb_miss.orR
-  midas.targetutils.PerfCounter(io.dpath.perf.l2miss, "l1_htlb_miss", "L1 HTLB Miss")
+  midas.targetutils.PerfCounter(htlb_miss.orR, "l1_htlb_miss", "L1 HTLB Miss")
   when(io.htw.l1miss) {
     printf("[HTLB] L1 Miss\n")
   }
@@ -411,7 +411,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
       when (next_state === s_dump) {
         midas.targetutils.SynthesizePrintf(printf("[HTLB] Dumped %d-th L1 Entry %d\n", dumped_entry_idx, hid_to_dump))
-      } .elsewhen (next_state === s_dump_req) {
+      } .elsewhen (next_state === s_dump_replay_pending) {
         midas.targetutils.SynthesizePrintf(printf("[HTLB] Nacked, Pending dumping %d-th L1 Entry %d\n", dumped_entry_idx, hid_to_dump))
       }
     }
