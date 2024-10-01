@@ -92,6 +92,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
   val resp_valid = RegNext(RegInit(false.B))
 
+  when (io.dpath.customCSRs.htBase =/= 0.U && state =/= next_state) {
+    midas.targetutils.SynthesizePrintf(printf("[HTW] State: %d, Next_State: %d\n", state, next_state))
+  }
+
   val clock_en =
     state =/= s_ready || l2_refill_wire || io.requestor.req.valid || io.dpath.customCSRs.disableDCacheClockGate
   io.dpath.clock_enabled := usingVM.B && clock_en

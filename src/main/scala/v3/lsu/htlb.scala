@@ -111,6 +111,10 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val next_state = WireDefault(state)
   state := Mux(io.htBase.orR, OptimizationBarrier(next_state), s_ready)
 
+  when (io.htBase =/= 0.U && state =/= next_state) {
+    midas.targetutils.SynthesizePrintf(printf("[HTLB] State: %d, Next_State: %d\n", state, next_state))
+  }
+
   // Refill State
   val do_refill = io.htw.resp.valid && !io.htw.resp.bits.ae_htw && io.htw.resp.bits.hte.addr =/= 0.U
   val hid_req = Reg(UInt(handleBits.W))
@@ -302,11 +306,11 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   val way_idx_update = (state === s_dump && !hit) || (state === s_dump_wait && mem_resp_valid)
   val set_idx_update = way_idx === cfg.nWays.U && state === s_dump
-  printf("way_idx_update: %d, set_idx_update: %d\n", way_idx_update, set_idx_update)
+  // printf("way_idx_update: %d, set_idx_update: %d\n", way_idx_update, set_idx_update)
 
   val way_clear = set_idx_update || (state === s_dump_req && way_idx === boomParams.nL1HTLBWays.U) || (state === s_dump && next_state === s_ready)
   val set_clear = (state === s_dump && next_state === s_ready)
-  printf("way_clear: %d, set_clear: %d\n", way_clear, set_clear)
+  // printf("way_clear: %d, set_clear: %d\n", way_clear, set_clear)
 
   when (set_idx < cfg.nSets.U && way_idx < cfg.nWays.U && state === s_dump) {
     val way = l1_plru.way(set_idx(idxBits-1,0))
@@ -334,7 +338,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   set_idx := Mux(set_idx_update, set_idx + 1.U, 
                      Mux(state === s_dump_req && way_idx === boomParams.nL1HTLBWays.U, hid_to_dump(idxBits-1,0) + 1.U, 
                          Mux(set_clear, 0.U, set_idx)))
-  printf("set_idx: %d, way_idx: %d\n", set_idx, way_idx)
+  // printf("set_idx: %d, way_idx: %d\n", set_idx, way_idx)
 
   io.htw.l1miss := do_refill || htlb_miss.orR
   midas.targetutils.PerfCounter(htlb_miss.orR, "l1_htlb_miss", "L1 HTLB Miss")
@@ -365,12 +369,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   io.mem.s1_data.data := hid_to_dump
   io.mem.s1_data.mask := ((1 << coreDataBytes) - 1).U
   io.mem.s2_kill := false.B
-
-  when (io.mem.s2_xcpt.asUInt =/= 0.U) {
-    midas.targetutils.SynthesizePrintf(printf("[HTLB] Exception in HTLB: %x\n", io.mem.s2_xcpt.asUInt))
-    next_state := s_ready
-    // assert(io.mem.s2_xcpt.asUInt === 0.U, "HTLB dumping to memory failed?!?")
-  }
 
   switch (state) {
     is (s_ready) {
@@ -430,6 +428,12 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         midas.targetutils.SynthesizePrintf(printf("[HTLB] Retrying dumping %d-th L1 Entry %d\n", dumped_entry_idx, hid_to_dump))
       }
     }
+  }
+
+  when (io.mem.s2_xcpt.asUInt =/= 0.U) {
+    midas.targetutils.SynthesizePrintf(printf("[HTLB] Exception in HTLB: %x\n", io.mem.s2_xcpt.asUInt))
+    next_state := s_ready
+    // assert(io.mem.s2_xcpt.asUInt === 0.U, "HTLB dumping to memory failed?!?")
   }
 
   when(reset.asBool || io.clear_htlb) {
