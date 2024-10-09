@@ -23,6 +23,7 @@ class HTLBResp(implicit p: Parameters) extends BoomBundle()(p) {
   val miss = Bool()
   val phys = Bool()
   val try_phys = Bool()
+  val ae = Bool()
 }
 
 class TLBHTLBResp(implicit p: Parameters) extends BoomBundle()(p) {
@@ -44,7 +45,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val mem = new HellaCacheIO
     val htDump = Input(UInt(maxSVAddrBits.W))
     val htInval = Input(UInt(handleBits.W))
-    val htBase = Input(UInt(maxSVAddrBits.W))
+    val htBase = Input(UInt(xLen.W))
     val kill = Input(Bool())
     val ptw_done = Input(Bool())
     val clear_htlb = Input(Bool())
@@ -54,6 +55,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val phys = Bool()
     val addr = UInt(maxSVAddrBits.W)
     val try_phys = Bool()
+    val ae = Bool()
   }
 
   class Entry(nSets: Int) extends Bundle {
@@ -116,7 +118,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   }
 
   // Refill State
-  val do_refill = io.htw.resp.valid && !io.htw.resp.bits.ae_htw && io.htw.resp.bits.hte.addr =/= 0.U
+  val do_refill = io.htw.resp.valid
   val hid_req = Reg(UInt(handleBits.W))
 
   val l1_plru = new SetAssocLRU(cfg.nSets, cfg.nWays, "plru")
@@ -186,6 +188,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).phys)
   val try_phys = widthMap(w =>
     entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).try_phys)
+  val ae = widthMap(w =>
+    entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).ae)
 
   // Send response to LSU
   for (w <- 0 until memWidth) {
@@ -203,7 +207,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     io.resp(w).addr := Mux(!hm_enabled(w), effective_address,
                           Mux (!io.resp(w).miss, addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0), 0.U))
     io.resp(w).phys := Mux(hm_enabled(w), phys(w), false.B)
-    io.resp(w).try_phys := Mux(hm_enabled(w), try_phys(w) && !cross_pages && !phys(w), false.B)
+    io.resp(w).try_phys := Mux(hm_enabled(w) && io.htBase(xLen-1), try_phys(w) && !cross_pages && !phys(w), false.B)
+    io.resp(w).ae := Mux(hm_enabled(w), ae(w), false.B)
 
     when (!(do_refill || htlb_miss(w)) && hm_enabled(w) && try_phys(w)) {
       when ((addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0))(vaddrBits-1, pgIdxBits) =/= addr(w)(vaddrBits-1, pgIdxBits)) {
@@ -215,12 +220,13 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
     when(!io.resp(w).miss && io.req(w).valid && hm_enabled(w)) {
        midas.targetutils.SynthesizePrintf(printf(
-        "[HTLB] -> [LSU] %x %d %d (entry try_phys: %d) (for %x)\n",
+        "[HTLB] -> [LSU] %x %d %d (entry try_phys: %d) (for %x) ae: %d\n",
         io.resp(w).addr,
         io.resp(w).phys,
         io.resp(w).try_phys,
         try_phys(w),
-        io.req(w).bits.haddr
+        io.req(w).bits.haddr,
+        io.resp(w).ae
       ))
     }
   }
@@ -250,12 +256,14 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     newEntry.phys := io.htw.resp.bits.hte.phys
     newEntry.addr := io.htw.resp.bits.hte.addr
     newEntry.try_phys := io.htw.resp.bits.hte.try_phys
+    newEntry.ae:= io.htw.resp.bits.hte.ae
 
     midas.targetutils.SynthesizePrintf(printf(
-      "[HTLB] New Entry: %x, %d, filling in (tag: %d) \n",
+      "[HTLB] New Entry: %x, %d, filling in (tag: %d), ae: %d \n",
       newEntry.addr,
       newEntry.phys,
-      hid_req
+      hid_req,
+      newEntry.ae
     ))
 
     val (r_tag, r_idx) = Split(hid_req, idxBits)
@@ -277,6 +285,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     victim_entry.addr := victim_line.data.asTypeOf(new HTLBEntryData).addr
     victim_entry.phys := victim_line.data.asTypeOf(new HTLBEntryData).phys
     victim_entry.try_phys := victim_line.data.asTypeOf(new HTLBEntryData).try_phys
+    victim_entry.ae := victim_line.data.asTypeOf(new HTLBEntryData).ae
     victim_entry.hid := Cat(victim_line.tag, r_idx)
 
     victim_line.insert(r_tag, newEntry)
@@ -430,11 +439,11 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
   }
 
-  when (io.mem.s2_xcpt.asUInt =/= 0.U) {
-    midas.targetutils.SynthesizePrintf(printf("[HTLB] Exception in HTLB: %x\n", io.mem.s2_xcpt.asUInt))
-    next_state := s_ready
-    // assert(io.mem.s2_xcpt.asUInt === 0.U, "HTLB dumping to memory failed?!?")
-  }
+  // when (io.mem.s2_xcpt.asUInt =/= 0.U) {
+  //   midas.targetutils.SynthesizePrintf(printf("[HTLB] Exception in HTLB: %x\n", io.mem.s2_xcpt.asUInt))
+  //   next_state := s_ready
+  //   // assert(io.mem.s2_xcpt.asUInt === 0.U, "HTLB dumping to memory failed?!?")
+  // }
 
   when(reset.asBool || io.clear_htlb) {
     when (io.clear_htlb) {

@@ -213,7 +213,7 @@ class WithNLargeYukons(n: Int = 1) extends Config(
               numStqEntries = 24,
               maxBrCount = 16,
               numFetchBufferEntries = 24,
-              enablePrefetching = true,
+              // enablePrefetching = true,
               ftq = FtqParameters(nEntries=32),
               fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
               nL2TLBWays=16,

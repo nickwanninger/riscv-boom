@@ -19,7 +19,8 @@ import freechips.rocketchip.diplomacy.BufferParams.pipe
 class HTE(implicit p: Parameters) extends BoomBundle()(p) {
   val phys = Bool()
   val try_phys = Bool()
-  val reserved = UInt((64 - maxSVAddrBits - 2).W)
+  val ae = Bool()
+  val reserved = UInt((64 - maxSVAddrBits - 3).W)
   val addr = UInt(maxSVAddrBits.W)
 }
 
@@ -30,6 +31,7 @@ class L2HTLBEntry(nSets: Int)(implicit p: Parameters) extends BoomBundle()(p) {
   val try_phys = Bool()
   val phys = Bool()
   val addr = UInt(maxSVAddrBits.W)
+  val ae = Bool()
 }
 
 class HTWReq(implicit p: Parameters) extends BoomBundle()(p) {
@@ -38,13 +40,13 @@ class HTWReq(implicit p: Parameters) extends BoomBundle()(p) {
 
 class HTWResp(implicit p: Parameters) extends BoomBundle()(p) {
   val hte = new HTE
-  val ae_htw = Bool()
 }
 
 class EvictionReq(implicit p: Parameters) extends BoomBundle()(p) {
   val addr = UInt(maxSVAddrBits.W)
   val try_phys = Bool()
   val phys = Bool()
+  val ae = Bool()
   val hid = UInt(handleBits.W)
 }
 
@@ -90,6 +92,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
   val l2_refill_wire = Wire(Bool())
   state := Mux(io.dpath.customCSRs.htBase =/= 0.U, OptimizationBarrier(next_state), s_ready)
 
+  // de-chicken bit the htBase CSR
+  val htBase = io.dpath.customCSRs.htBase(62, 0)
+
   val resp_valid = RegNext(RegInit(false.B))
 
   when (io.dpath.customCSRs.htBase =/= 0.U && state =/= next_state) {
@@ -117,7 +122,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.requestor.evict_resp := state =/= s_victim2 && next_state === s_ready
 
     // Handle HTW Responses
-    val mem_resp_valid = RegNext(io.mem.resp.valid)
+    val mem_resp_valid = RegNext(io.mem.resp.valid || io.mem.s2_xcpt.asUInt =/= 0.U)
     val mem_resp_data = RegNext(io.mem.resp.bits.data)
     io.mem.uncached_resp.map { resp =>
       assert(!(resp.valid && io.mem.resp.valid))
@@ -132,7 +137,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     // NOTE: we assume that the HTE will always be valid
     io.requestor.resp.valid := resp_valid
     io.requestor.resp.bits.hte := found_hte
-    io.requestor.resp.bits.ae_htw := false.B
 
     val nL2HTLBSets = boomParams.nL2HTLBEntries / boomParams.nL2HTLBWays
     val idxBits = log2Ceil(nL2HTLBSets)
@@ -219,6 +223,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           entry.addr := victim_hte.addr
           entry.tag := v_tag
           entry.phys := victim_hte.phys
+          entry.ae := victim_hte.ae
           // if all the way are valid, use plru to select one way to be replaced,
           // otherwise use PriorityEncoderOH to select one
           val wmask =
@@ -285,6 +290,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       s2_hte.reserved := 0.U
       s2_hte.try_phys := s2_hit_entry.try_phys
       s2_hte.phys := s2_hit_entry.phys
+      s2_hte.ae := s2_hit_entry.ae
 
       for (way <- 0 until boomParams.nL2HTLBWays) {
         ccover(
@@ -350,6 +356,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         ds2_hte.tag := ds2_hit_entry.tag
         ds2_hte.try_phys := DontCare
         ds2_hte.phys := DontCare
+        ds2_hte.ae := DontCare
 
         when(ds2_hit && dr_valid_vec(way)) {
           hid_to_dump := Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx(idxBits-1,0))
@@ -465,6 +472,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val pte = WireDefault(tmp)
     pte.try_phys := true.B
     pte.phys := false.B
+    pte.ae := RegNext(io.mem.s2_xcpt.asUInt =/= 0.U)
 
     found_hte := OptimizationBarrier(
       Mux(l2_hit && !l2_error, l2_hte, Mux(mem_resp_valid, pte, found_hte))
@@ -494,7 +502,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         next_state := Mux(io.mem.req.fire, s_wait1, s_req)
         midas.targetutils.SynthesizePrintf(printf(
           "[HTW] -> [Mem] Looking up HID: %d at %x\n",
-          (io.mem.req.bits.addr - io.dpath.customCSRs.htBase)/8.U(xLen.W),
+          (io.mem.req.bits.addr - htBase)/8.U(xLen.W),
           io.mem.req.bits.addr
         ))
       }
@@ -509,23 +517,24 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         resp_valid := mem_resp_valid
         when (mem_resp_valid) {
           midas.targetutils.SynthesizePrintf(printf(
-            "[HTW] Found HTE - Frozen: Reserved: %x, Addr: %x, try_phys: %d\n",
-            pte.reserved,
-            pte.addr,
-            pte.try_phys
+            "[HTW] Found HTE - Frozen: Reserved: %x, Addr: %x, try_phys: %d, ae: %d\n",
+            found_hte.reserved,
+            found_hte.addr,
+            found_hte.try_phys,
+            found_hte.ae
           ))
         }
       }
       is(s_victim1) {
         next_state := s_victim2
-        midas.targetutils.SynthesizePrintf(printf("[HTW] Inserting Victim Entry: HID: %d, Addr: %x, Phys: %d, try_phys: %d\n", victim_hte.hid, victim_hte.addr, victim_hte.phys, victim_hte.try_phys))
+        midas.targetutils.SynthesizePrintf(printf("[HTW] Inserting Victim Entry: HID: %d, Addr: %x, Phys: %d, try_phys: %d, ae: %d\n", victim_hte.hid, victim_hte.addr, victim_hte.phys, victim_hte.try_phys, victim_hte.ae))
       }
       is(s_victim2) {
         next_state := s_victim3
       }
       is(s_victim3) {
         next_state := s_ready
-        midas.targetutils.SynthesizePrintf(printf("[HTW] Inserted Victim Entry: HID: %d, Addr: %x, Phys: %d, try_phys: %d\n", victim_hte.hid, victim_hte.addr, victim_hte.phys, victim_hte.try_phys))
+        midas.targetutils.SynthesizePrintf(printf("[HTW] Inserted Victim Entry: HID: %d, Addr: %x, Phys: %d, try_phys: %d, ae: %d\n", victim_hte.hid, victim_hte.addr, victim_hte.phys, victim_hte.try_phys, victim_hte.ae))
       }
       is(s_invalidated) {
         midas.targetutils.SynthesizePrintf(printf("[HTW] Finished invalidating\n"))
@@ -577,8 +586,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     }
 
     // HT Lookup
-    val hte_vaddr =
-      io.dpath.customCSRs.htBase + hid * ((new HTE().getWidth.U) / 8.U((log2Ceil(new HTE().getWidth) + 1).W))
+    val hte_vaddr = htBase + hid * ((new HTE().getWidth.U) / 8.U((log2Ceil(new HTE().getWidth) + 1).W))
 
     // Prepare Memory Request
     io.mem.keep_clock_enabled := false.B
@@ -607,8 +615,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     when (io.mem.s2_xcpt.asUInt =/= 0.U) {
       midas.targetutils.SynthesizePrintf(printf("[HTW] Exception in HTW: %x\n", io.mem.s2_xcpt.asUInt))
-      // io.requestor.resp.bits.ae_htw := true.B
-      next_state := s_ready
     }
   }
 

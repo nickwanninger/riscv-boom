@@ -1436,6 +1436,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.lsu.htBase := custom_csrs.htBase
   io.lsu.htDump := custom_csrs.htDump
   io.lsu.htInval := custom_csrs.htInval
+  io.lsu.htSize := custom_csrs.htSize
 
   val htlb_enabled = (ENABLE_HTLB > 0).B && custom_csrs.htBase =/= 0.U && (csr.io.status.dprv + 1.U) <= ENABLE_HTLB.U
 
