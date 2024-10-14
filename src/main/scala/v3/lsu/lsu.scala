@@ -674,8 +674,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val hid = widthMap(w => exe_htlb_vaddr(w)(xLen-2, handleOffsetBits))
   val is_handle = widthMap(w => (exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)))
   val is_ht_infinite = io.core.htSize === 0.U
-  printf("htSize: %x, is_ht_infinite: %d\n", io.core.htSize, is_ht_infinite)
-  printf("hid: %x, is_handle: %d\n", hid(0), is_handle(0))
   val exe_htlb_passthr = widthMap(w => Mux(htlb_enabled, 
                                           Mux(will_fire_hella_incoming(w), true.B, !((is_ht_infinite || (!is_ht_infinite && hid(w) < io.core.htSize)) && is_handle(w))), true.B))
 
@@ -688,31 +686,31 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.req(w).bits.passthrough := exe_htlb_passthr(w)
     when (htlb.io.req(w).valid && !exe_htlb_passthr(w)) {
         midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
-        midas.targetutils.SynthesizePrintf(printf("will_fire_load_incoming: %d, will_fire_stad_incoming: %d, will_fire_sta_incoming: %d, will_fire_std_incoming: %d, will_fire_sfence: %d, will_fire_release: %d, will_fire_hella_incoming: %d, will_fire_hella_wakeup: %d, will_fire_load_retry: %d, will_fire_sta_retry: %d, will_fire_load_wakeup: %d, will_fire_store_commit: %d\n",
+        midas.targetutils.SynthesizePrintf(printf("WillFire: load_incoming: %d, stad_incoming: %d, sta_incoming: %d, std_incoming: %d, sfence: %d, release: %d, hella_incoming: %d, hella_wakeup: %d, load_retry: %d, sta_retry: %d, load_wakeup: %d, store_commit: %d\n",
       will_fire_load_incoming(w), will_fire_stad_incoming(w), will_fire_sta_incoming(w), will_fire_std_incoming(w), will_fire_sfence(w), will_fire_release(w), will_fire_hella_incoming(w), will_fire_hella_wakeup(w), will_fire_load_retry(w), will_fire_sta_retry(w), will_fire_load_wakeup(w), will_fire_store_commit(w)))
     }
   }
   htlb.io.kill                    := exe_kill.reduce(_||_)
 
   for (w <- 0 until memWidth) {
-    when ((htlb.io.resp(w).ae || hella_xcpt.asUInt =/= 0.U) && exe_htlb_vaddr(w) =/= 0.U) {
+    when (htlb.io.resp(w).ae) {
       midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] AE on haddr %x -> vaddr %x\n", exe_htlb_vaddr(w), htlb.io.resp(w).addr))
-      // print the entire load and store queues
-      for (i <- 0 until numLdqEntries) {
-        when (ldq(i).valid) {
-          midas.targetutils.SynthesizePrintf(printf("LDQ[%d]: addr_valid: %d, addr: %x, is_virtual: %d, is_uncacheable: %d, executed: %d, succeeded: %d, order_fail: %d, observed: %d, st_dep_mask: %x, youngest_stq_idx: %d, forward_std_val: %d, forward_stq_idx: %d, debug_wb_data: %x\n",
-            i.U, ldq(i).bits.addr.valid, ldq(i).bits.addr.bits, ldq(i).bits.addr_is_virtual, ldq(i).bits.addr_is_uncacheable, ldq(i).bits.executed, ldq(i).bits.succeeded, ldq(i).bits.order_fail, ldq(i).bits.observed, ldq(i).bits.st_dep_mask, ldq(i).bits.youngest_stq_idx, ldq(i).bits.forward_std_val, ldq(i).bits.forward_stq_idx, ldq(i).bits.debug_wb_data))
-            // print uop as well
-          midas.targetutils.SynthesizePrintf(printf("LDQ[%d]: uopc: %d, inst: %x, debug_inst: %x, is_rvc: %d, debug_pc: %x, iq_type: %x, fu_code: %x, unsafe: %d\n", i.U, ldq(i).bits.uop.uopc, ldq(i).bits.uop.inst, ldq(i).bits.uop.debug_inst, ldq(i).bits.uop.is_rvc, ldq(i).bits.uop.debug_pc, ldq(i).bits.uop.iq_type, ldq(i).bits.uop.fu_code, ldq(i).bits.uop.unsafe))
-        }
-      }
-      for (i <- 0 until numStqEntries) {
-        when (stq(i).valid) {
-          midas.targetutils.SynthesizePrintf(printf("STQ[%d]: addr_valid: %d, addr: %x, is_virtual: %d, data_valid: %d, data: %x, committed: %d, succeeded: %d, debug_wb_data: %x\n",
-            i.U, stq(i).bits.addr.valid, stq(i).bits.addr.bits, stq(i).bits.addr_is_virtual, stq(i).bits.data.valid, stq(i).bits.data.bits, stq(i).bits.committed, stq(i).bits.succeeded, stq(i).bits.debug_wb_data))
-          midas.targetutils.SynthesizePrintf(printf("STQ[%d]: uopc: %d, inst: %x, debug_inst: %x, is_rvc: %d, debug_pc: %x, iq_type: %x, fu_code: %x, unsafe: %d\n", i.U, stq(i).bits.uop.uopc, stq(i).bits.uop.inst, stq(i).bits.uop.debug_inst, stq(i).bits.uop.is_rvc, stq(i).bits.uop.debug_pc, stq(i).bits.uop.iq_type, stq(i).bits.uop.fu_code, stq(i).bits.uop.unsafe))
-        }
-      }
+  //     // print the entire load and store queues
+  //     for (i <- 0 until numLdqEntries) {
+  //       when (ldq(i).valid) {
+  //         midas.targetutils.SynthesizePrintf(printf("LDQ[%d]: addr_valid: %d, addr: %x, is_virtual: %d, is_uncacheable: %d, executed: %d, succeeded: %d, order_fail: %d, observed: %d, st_dep_mask: %x, youngest_stq_idx: %d, forward_std_val: %d, forward_stq_idx: %d, debug_wb_data: %x\n",
+  //           i.U, ldq(i).bits.addr.valid, ldq(i).bits.addr.bits, ldq(i).bits.addr_is_virtual, ldq(i).bits.addr_is_uncacheable, ldq(i).bits.executed, ldq(i).bits.succeeded, ldq(i).bits.order_fail, ldq(i).bits.observed, ldq(i).bits.st_dep_mask, ldq(i).bits.youngest_stq_idx, ldq(i).bits.forward_std_val, ldq(i).bits.forward_stq_idx, ldq(i).bits.debug_wb_data))
+  //           // print uop as well
+  //         midas.targetutils.SynthesizePrintf(printf("LDQ[%d]: uopc: %d, inst: %x, debug_inst: %x, is_rvc: %d, debug_pc: %x, iq_type: %x, fu_code: %x, unsafe: %d\n", i.U, ldq(i).bits.uop.uopc, ldq(i).bits.uop.inst, ldq(i).bits.uop.debug_inst, ldq(i).bits.uop.is_rvc, ldq(i).bits.uop.debug_pc, ldq(i).bits.uop.iq_type, ldq(i).bits.uop.fu_code, ldq(i).bits.uop.unsafe))
+  //       }
+  //     }
+  //     for (i <- 0 until numStqEntries) {
+  //       when (stq(i).valid) {
+  //         midas.targetutils.SynthesizePrintf(printf("STQ[%d]: addr_valid: %d, addr: %x, is_virtual: %d, data_valid: %d, data: %x, committed: %d, succeeded: %d, debug_wb_data: %x\n",
+  //           i.U, stq(i).bits.addr.valid, stq(i).bits.addr.bits, stq(i).bits.addr_is_virtual, stq(i).bits.data.valid, stq(i).bits.data.bits, stq(i).bits.committed, stq(i).bits.succeeded, stq(i).bits.debug_wb_data))
+  //         midas.targetutils.SynthesizePrintf(printf("STQ[%d]: uopc: %d, inst: %x, debug_inst: %x, is_rvc: %d, debug_pc: %x, iq_type: %x, fu_code: %x, unsafe: %d\n", i.U, stq(i).bits.uop.uopc, stq(i).bits.uop.inst, stq(i).bits.uop.debug_inst, stq(i).bits.uop.is_rvc, stq(i).bits.uop.debug_pc, stq(i).bits.uop.iq_type, stq(i).bits.uop.fu_code, stq(i).bits.uop.unsafe))
+  //       }
+  //     }
     }
   }
 
