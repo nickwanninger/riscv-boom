@@ -49,6 +49,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val kill = Input(Bool())
     val ptw_done = Input(Bool())
     val clear_htlb = Input(Bool())
+    val miss_rdy = Output(Bool())
   })
 
   class HTLBEntryData() extends Bundle() {
@@ -192,6 +193,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).ae)
 
   // Send response to LSU
+  io.miss_rdy := state === s_ready
   for (w <- 0 until memWidth) {
     // handle original case
     val sum = io.req(w).bits.haddr
@@ -202,13 +204,16 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val effective_address = Cat(ea_sign, sum(vaddrBits - 1, 0)).asUInt
     val cross_pages = WireDefault(false.B)
 
+    // val ae_haddr = io.req(w).bits.haddr(xLen - 2, handleOffsetBits) // io.htBase + hid(w) * ((new HTE().getWidth.U) / 8.U((log2Ceil(new HTE().getWidth) + 1).W))
+    val paddr_opt_enabled = io.htBase(xLen-1)
     io.req(w).ready := true.B
     io.resp(w).miss := do_refill || htlb_miss(w) || (htlb_hit(w) && cross_pages)
     io.resp(w).addr := Mux(!hm_enabled(w), effective_address,
-                          Mux (!io.resp(w).miss, addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0), 0.U))
-    io.resp(w).phys := Mux(hm_enabled(w), phys(w), false.B)
-    io.resp(w).try_phys := Mux(hm_enabled(w) && io.htBase(xLen-1), try_phys(w) && !cross_pages && !phys(w), false.B)
-    io.resp(w).ae := Mux(hm_enabled(w), ae(w), false.B)
+                          Mux (!io.resp(w).miss, 
+                               addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0), 0.U))
+    io.resp(w).phys := Mux(hm_enabled(w) && htlb_hit(w), phys(w), false.B)
+    io.resp(w).try_phys := Mux(hm_enabled(w) && paddr_opt_enabled && htlb_hit(w), try_phys(w) && !cross_pages && !phys(w), false.B)
+    io.resp(w).ae := Mux(hm_enabled(w) && htlb_hit(w), ae(w), false.B)
 
     when (!(do_refill || htlb_miss(w)) && hm_enabled(w) && try_phys(w)) {
       when ((addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0))(vaddrBits-1, pgIdxBits) =/= addr(w)(vaddrBits-1, pgIdxBits)) {
@@ -313,6 +318,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val hid_to_dump = RegInit(0.U(handleBits.W))
   val hit = WireDefault(false.B)
 
+  // TODO-ATMN: this can be optimized by using a priority encoder to skip invalid entries
   val way_idx_update = (state === s_dump && !hit) || (state === s_dump_wait && mem_resp_valid)
   val set_idx_update = way_idx === cfg.nWays.U && state === s_dump
   // printf("way_idx_update: %d, set_idx_update: %d\n", way_idx_update, set_idx_update)

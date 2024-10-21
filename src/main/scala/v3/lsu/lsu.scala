@@ -487,6 +487,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                                  ldq_retry_e.bits.addr_is_virtual             &&
                                 !p1_block_load_mask(ldq_retry_idx)            &&
                                 !p2_block_load_mask(ldq_retry_idx)            &&
+                                // RegNext(htlb.io.miss_rdy)                     &&
                                 RegNext(dtlb.io.miss_rdy)                     &&
                                 !store_needs_order                            &&
                                 (w == memWidth-1).B                           && // TODO: Is this best scheduling?
@@ -499,6 +500,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                                  stq_retry_e.bits.addr.valid                  &&
                                  stq_retry_e.bits.addr_is_virtual             &&
                                  (w == memWidth-1).B                          &&
+                                //  RegNext(htlb.io.miss_rdy)                    &&
                                  RegNext(dtlb.io.miss_rdy)                    &&
                                  !(widthMap(i => (i != w).B               &&
                                                  can_fire_std_incoming(i) &&
@@ -692,9 +694,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   }
   htlb.io.kill                    := exe_kill.reduce(_||_)
 
+  val ae_htw_addrs = widthMap(w => Cat((1 << (maxSVAddrBits - 1 - handleBits)).U((xLen - handleBits).W), htlb.io.req(w).bits.haddr(xLen - 2, handleOffsetBits)))
   for (w <- 0 until memWidth) {
     when (htlb.io.resp(w).ae) {
-      midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] AE on haddr %x -> vaddr %x\n", exe_htlb_vaddr(w), htlb.io.resp(w).addr))
+      midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] AE on haddr %x -> vaddr %x\n", exe_htlb_vaddr(w), ae_htw_addrs(w)))
   //     // print the entire load and store queues
   //     for (i <- 0 until numLdqEntries) {
   //       when (ldq(i).valid) {
@@ -749,9 +752,12 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val ae_ld = widthMap(w => dtlb.io.req(w).valid && dtlb.io.resp(w).ae.ld && exe_tlb_uop(w).uses_ldq)
   val ae_st = widthMap(w => dtlb.io.req(w).valid && dtlb.io.resp(w).ae.st && exe_tlb_uop(w).uses_stq)
 
+  val ae_htw_st = widthMap(w => htlb.io.req(w).valid && htlb.io.resp(w).ae && exe_tlb_uop(w).uses_stq)
+  val ae_htw_ld = widthMap(w => htlb.io.req(w).valid && htlb.io.resp(w).ae && exe_tlb_uop(w).uses_ldq)
+
   // TODO check for xcpt_if and verify that never happens on non-speculative instructions.
   val mem_xcpt_valids = RegNext(widthMap(w =>
-                     (pf_ld(w) || pf_st(w) || ae_ld(w) || ae_st(w) || ma_ld(w) || ma_st(w)) &&
+                     (pf_ld(w) || pf_st(w) || ae_ld(w) || ae_st(w) || ma_ld(w) || ma_st(w) || ae_htw_ld(w) || ae_htw_st(w)) &&
                      !io.core.exception &&
                      !IsKilledByBranch(io.core.brupdate, exe_tlb_uop(w))))
   val mem_xcpt_uops   = RegNext(widthMap(w => UpdateBrMask(io.core.brupdate, exe_tlb_uop(w))))
@@ -760,9 +766,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     Mux(ma_st(w), rocket.Causes.misaligned_store.U,
     Mux(pf_ld(w), rocket.Causes.load_page_fault.U,
     Mux(pf_st(w), rocket.Causes.store_page_fault.U,
-    Mux(ae_ld(w), rocket.Causes.load_access.U,
+    Mux(ae_ld(w) || ae_htw_ld(w), rocket.Causes.load_access.U,
                   rocket.Causes.store_access.U)))))))
-  val mem_xcpt_vaddrs = RegNext(exe_htlb_vaddr)
+  val mem_xcpt_vaddrs = RegNext(Mux(widthMap(w => htlb.io.resp(w).ae).reduce(_||_) && htlb_enabled, ae_htw_addrs, exe_tlb_vaddr))
 
   for (w <- 0 until memWidth) {
     assert (!(dtlb.io.req(w).valid && exe_tlb_uop(w).is_fence), "Fence is pretending to talk to the TLB")

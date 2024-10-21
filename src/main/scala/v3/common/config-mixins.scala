@@ -190,6 +190,56 @@ class WithNSmallYukons(n: Int = 1) extends Config(
   })
 )
 
+class WithNMediumYukons(n: Int = 1) extends Config(
+  new WithTAGELBPD ++ // Default to TAGE-L BPD
+  new Config((site, here, up) => {
+    case TilesLocated(InSubsystem) => {
+      val prev = up(TilesLocated(InSubsystem), site)
+      val idOffset = up(NumTiles)
+      (0 until n).map { i =>
+        BoomTileAttachParams(
+          tileParams = BoomTileParams(
+            core = BoomCoreParams(
+              fetchWidth = 8,
+              decodeWidth = 2,
+              numRobEntries = 96,
+              issueParams = Seq(
+                IssueParams(issueWidth=1, numEntries=8, iqType=IQT_MEM.litValue, dispatchWidth=2),
+                IssueParams(issueWidth=1, numEntries=8, iqType=IQT_INT.litValue, dispatchWidth=2),
+                IssueParams(issueWidth=1, numEntries=8, iqType=IQT_FP.litValue , dispatchWidth=2)),
+              numIntPhysRegisters = 100,
+              numFpPhysRegisters = 96,
+              numLdqEntries = 24,
+              numStqEntries = 24,
+              maxBrCount = 16,
+              numFetchBufferEntries = 24,
+              ftq = FtqParameters(nEntries=16),
+              nPerfCounters = 4,
+              fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
+              nL2TLBWays=16,
+              nL2TLBEntries=2048,
+              nL1HTLBWays = 4,
+              nL1HTLBEntries = 64,
+              nL2HTLBWays = 8,
+              nL2HTLBEntries = 512,
+            ),
+            dcache = Some(
+              DCacheParams(rowBits = 128, nSets=64, nWays=8, nMSHRs=8, nTLBWays=6, nTLBSets = 16)
+            ),
+            icache = Some(
+              ICacheParams(rowBits = 128, nSets=64, nWays=8, fetchBytes=4*4)
+            ),
+            tileId = i + idOffset
+          ),
+          crossingParams = RocketCrossingParams()
+        )
+      } ++ prev
+    }
+    case XLen => 64
+    case NumTiles => up(NumTiles) + n
+  })
+)
+
 class WithNLargeYukons(n: Int = 1) extends Config(
   new WithTAGELBPD ++ // Default to TAGE-L BPD
   new Config((site, here, up) => {
