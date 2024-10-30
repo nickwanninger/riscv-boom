@@ -207,7 +207,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     // val ae_haddr = io.req(w).bits.haddr(xLen - 2, handleOffsetBits) // io.htBase + hid(w) * ((new HTE().getWidth.U) / 8.U((log2Ceil(new HTE().getWidth) + 1).W))
     val paddr_opt_enabled = io.htBase(xLen-1)
     io.req(w).ready := true.B
-    io.resp(w).miss := do_refill || htlb_miss(w) || (htlb_hit(w) && cross_pages)
+    io.resp(w).miss := do_refill || htlb_miss(w) || (htlb_hit(w) && cross_pages && phys(w))
     io.resp(w).addr := Mux(!hm_enabled(w), effective_address,
                           Mux (!io.resp(w).miss, 
                                addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0), 0.U))
@@ -215,6 +215,15 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     io.resp(w).try_phys := Mux(hm_enabled(w) && paddr_opt_enabled && htlb_hit(w), try_phys(w) && !cross_pages && !phys(w), false.B)
     io.resp(w).ae := Mux(hm_enabled(w) && htlb_hit(w), ae(w), false.B)
 
+    // you will try phys or have phys, check if you cross pages
+    when (hm_enabled(w) && (htlb_hit(w) && (try_phys(w) || phys(w)))) {
+      when ((addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0))(vaddrBits-1, pgIdxBits) =/= addr(w)(vaddrBits-1, pgIdxBits)) {
+        midas.targetutils.SynthesizePrintf(printf("[HTLB] object %d at vaddr %x accessed at offset %x crossed page boundaries\n", hid(w), addr(w), io.req(w).bits.haddr(handleOffsetBits - 1, 0)))
+        cross_pages := true.B
+        entries(hid_set(w))(OHToUInt(real_hits(w))).inval_try_phys()
+      }
+    }
+    /*
     when (!(do_refill || htlb_miss(w)) && hm_enabled(w) && try_phys(w)) {
       when ((addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0))(vaddrBits-1, pgIdxBits) =/= addr(w)(vaddrBits-1, pgIdxBits)) {
         midas.targetutils.SynthesizePrintf(printf("[HTLB] object %d at vaddr %x accessed at offset %x crossed page boundaries\n", hid(w), addr(w), io.req(w).bits.haddr(handleOffsetBits - 1, 0)))
@@ -222,6 +231,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         entries(hid_set(w))(OHToUInt(real_hits(w))).inval_try_phys()
       }
     }
+    */
 
     when(!io.resp(w).miss && io.req(w).valid && hm_enabled(w)) {
        midas.targetutils.SynthesizePrintf(printf(
