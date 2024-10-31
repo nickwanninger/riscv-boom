@@ -542,6 +542,62 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   // Can we fire a hellacache request that the dcache nack'd
   val can_fire_hella_wakeup    = WireInit(widthMap(w => false.B)) // This is assigned to in the hellashim controller
 
+  
+  // can't fire anything? debug print all cases
+  when (htlb_enabled && false.B) {
+    when (!(can_fire_load_incoming.reduce(_||_) || can_fire_stad_incoming.reduce(_||_) || can_fire_sta_incoming.reduce(_||_) ||
+            can_fire_std_incoming.reduce(_||_) || can_fire_sfence.reduce(_||_) || can_fire_release.reduce(_||_) ||
+            can_fire_load_retry.reduce(_||_) || can_fire_sta_retry.reduce(_||_) || can_fire_store_commit.reduce(_||_) ||
+            can_fire_load_wakeup.reduce(_||_) || can_fire_hella_incoming.reduce(_||_) || can_fire_hella_wakeup.reduce(_||_)))
+    {
+      midas.targetutils.SynthesizePrintf(printf("can_fire: load_inc=%b stad_inc=%b sta_inc=%b std_inc=%b sfence=%b release=%b load_retry=%b sta_retry=%b store_commit=%b load_wakeup=%b (block_load_wakeup=%d)\n", can_fire_load_incoming.asUInt, can_fire_stad_incoming.asUInt, can_fire_sta_incoming.asUInt, can_fire_std_incoming.asUInt,
+        can_fire_sfence.asUInt, can_fire_release.asUInt, can_fire_load_retry.asUInt, can_fire_sta_retry.asUInt,
+        can_fire_store_commit.asUInt, can_fire_load_wakeup.asUInt, block_load_wakeup))
+
+      midas.targetutils.SynthesizePrintf(printf("can_fire_load_retry_reasons: valid=%b addr_valid=%b addr_is_virtual=%b p1_block_load_mask=%b p2_block_load_mask=%b miss_rdy=%b store_needs_order=%b order_fail=%b\n", ldq_retry_e.valid, ldq_retry_e.bits.addr.valid, ldq_retry_e.bits.addr_is_virtual, p1_block_load_mask(ldq_retry_idx), p2_block_load_mask(ldq_retry_idx), dtlb.io.miss_rdy, store_needs_order, ldq_retry_e.bits.order_fail))
+      midas.targetutils.SynthesizePrintf(printf("can_fire_sta_retry_reasons: valid=%b addr_valid=%b addr_is_virtual=%b miss_rdy=%b, other=%d\n",
+        stq_retry_e.valid, stq_retry_e.bits.addr.valid, stq_retry_e.bits.addr_is_virtual, dtlb.io.miss_rdy, !(widthMap(i => (i != memWidth-1).B && can_fire_std_incoming(i) && stq_incoming_idx(i) === stq_retry_idx).reduce(_||_))))
+      midas.targetutils.SynthesizePrintf(printf("can_fire_store_commit_reasons: valid=%b is_fence=%b mem_xcpt_valid=%b exception=%b committed=%b is_amo=%b addr_valid=%b addr_is_virtual=%b data_valid=%b\n", stq_commit_e.valid, stq_commit_e.bits.uop.is_fence, mem_xcpt_valid, stq_commit_e.bits.uop.exception, stq_commit_e.bits.committed, stq_commit_e.bits.uop.is_amo, stq_commit_e.bits.addr.valid, stq_commit_e.bits.addr_is_virtual, stq_commit_e.bits.data.valid))
+      midas.targetutils.SynthesizePrintf(printf("can_fire_load_wakeup_reasons: valid=%b addr_valid=%b succeeded=%b addr_is_virtual=%b executed=%b order_fail=%b p1_block_load_mask=%b p2_block_load_mask=%b store_needs_order=%b block_load_wakeup=%b, misc1=%b, misc2=%b, misc3=%b\n", ldq_wakeup_e.valid, ldq_wakeup_e.bits.addr.valid, ldq_wakeup_e.bits.succeeded, ldq_wakeup_e.bits.addr_is_virtual, ldq_wakeup_e.bits.executed, ldq_wakeup_e.bits.order_fail, p1_block_load_mask(ldq_wakeup_idx), p2_block_load_mask(ldq_wakeup_idx), store_needs_order, block_load_wakeup, io.core.commit_load_at_rob_head, ldq_head === ldq_wakeup_idx, ldq_wakeup_e.bits.st_dep_mask.asUInt === 0.U))
+
+      // Monitor all LDQ entries
+      for (i <- 0 until numLdqEntries) {
+        when (ldq(i).valid) {
+          printf(midas.targetutils.SynthesizePrintf(
+            "LDQ[%d] V:%d ADDR:0x%x STQ_IDX:%d ST_MASK:0x%x ADDR_V:%d EX:%d SUC:%d OF:%d OBS:%d FWD:%d\n",
+            i.U,
+            ldq(i).valid,
+            ldq(i).bits.addr.bits,  // Added address
+            ldq(i).bits.youngest_stq_idx,
+            ldq(i).bits.st_dep_mask,
+            ldq(i).bits.addr.valid,
+            ldq(i).bits.executed,
+            ldq(i).bits.succeeded,
+            ldq(i).bits.order_fail,
+            ldq(i).bits.observed,
+            ldq(i).bits.forward_std_val
+          ))
+        }
+      }
+
+      // Monitor all STQ entries
+      for (i <- 0 until numStqEntries) {
+        when (stq(i).valid) {
+          printf(midas.targetutils.SynthesizePrintf(
+            "STQ[%d] V:%d ADDR:0x%x ADDR_V:%d DATA_V:%d COM:%d SUC:%d\n",
+            i.U,
+            stq(i).valid,
+            stq(i).bits.addr.bits,  // Added address
+            stq(i).bits.addr.valid,
+            stq(i).bits.data.valid,
+            stq(i).bits.committed,
+            stq(i).bits.succeeded
+          ))
+        }
+      }
+    }
+  }
+
   //---------------------------------------------------------
   // Controller logic. Arbitrate which request actually fires
 
@@ -588,6 +644,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     will_fire_sta_retry     (w) := lsu_sched(can_fire_sta_retry     (w) , true , true, false, true , true)  // TLB ,    , LCAM , ROB // TODO: This should be higher priority
     will_fire_load_wakeup   (w) := lsu_sched(can_fire_load_wakeup   (w) , false, false, true, true , false) //     , DC , LCAM1
     will_fire_store_commit  (w) := lsu_sched(can_fire_store_commit  (w) , false, false, true , false, false) //     , DC
+    when (htlb_enabled && false.B) {
+      midas.targetutils.SynthesizePrintf(printf("WillFire: load_incoming: %d, stad_incoming: %d, sta_incoming: %d, std_incoming: %d, sfence: %d, release: %d, hella_incoming: %d, hella_wakeup: %d, load_retry: %d, sta_retry: %d, load_wakeup: %d, store_commit: %d\n",
+        will_fire_load_incoming(w), will_fire_stad_incoming(w), will_fire_sta_incoming(w), will_fire_std_incoming(w), will_fire_sfence(w), will_fire_release(w), will_fire_hella_incoming(w), will_fire_hella_wakeup(w), will_fire_load_retry(w), will_fire_sta_retry(w), will_fire_load_wakeup(w), will_fire_store_commit(w)))
+    }
 
 
     assert(!(exe_req(w).valid && !(will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w) || will_fire_std_incoming(w) || will_fire_sfence(w))))
@@ -680,16 +740,11 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                                           Mux(will_fire_hella_incoming(w), true.B, !((is_ht_infinite || (!is_ht_infinite && hid(w) < io.core.htSize)) && is_handle(w))), true.B))
 
   for (w <- 0 until memWidth) {
-    // printf("will retry fire load: %d, store: %d (%x)\n", will_fire_load_retry(w), will_fire_store_retry(w), exe_htlb_vaddr(w))
-    // printf("agen fire load: %d, store: %d (%x)\n", will_fire_load_agen(w), will_fire_store_agen(w), exe_htlb_vaddr(w))
-
     htlb.io.req(w).valid            := exe_htlb_valid(w)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_htlb_passthr(w)
     when (htlb.io.req(w).valid && !exe_htlb_passthr(w)) {
         midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
-        midas.targetutils.SynthesizePrintf(printf("WillFire: load_incoming: %d, stad_incoming: %d, sta_incoming: %d, std_incoming: %d, sfence: %d, release: %d, hella_incoming: %d, hella_wakeup: %d, load_retry: %d, sta_retry: %d, load_wakeup: %d, store_commit: %d\n",
-      will_fire_load_incoming(w), will_fire_stad_incoming(w), will_fire_sta_incoming(w), will_fire_std_incoming(w), will_fire_sfence(w), will_fire_release(w), will_fire_hella_incoming(w), will_fire_hella_wakeup(w), will_fire_load_retry(w), will_fire_sta_retry(w), will_fire_load_wakeup(w), will_fire_store_commit(w)))
     }
   }
   htlb.io.kill                    := exe_kill.reduce(_||_)
@@ -698,22 +753,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   for (w <- 0 until memWidth) {
     when (htlb.io.resp(w).ae) {
       midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] AE on haddr %x -> vaddr %x\n", exe_htlb_vaddr(w), ae_htw_addrs(w)))
-  //     // print the entire load and store queues
-  //     for (i <- 0 until numLdqEntries) {
-  //       when (ldq(i).valid) {
-  //         midas.targetutils.SynthesizePrintf(printf("LDQ[%d]: addr_valid: %d, addr: %x, is_virtual: %d, is_uncacheable: %d, executed: %d, succeeded: %d, order_fail: %d, observed: %d, st_dep_mask: %x, youngest_stq_idx: %d, forward_std_val: %d, forward_stq_idx: %d, debug_wb_data: %x\n",
-  //           i.U, ldq(i).bits.addr.valid, ldq(i).bits.addr.bits, ldq(i).bits.addr_is_virtual, ldq(i).bits.addr_is_uncacheable, ldq(i).bits.executed, ldq(i).bits.succeeded, ldq(i).bits.order_fail, ldq(i).bits.observed, ldq(i).bits.st_dep_mask, ldq(i).bits.youngest_stq_idx, ldq(i).bits.forward_std_val, ldq(i).bits.forward_stq_idx, ldq(i).bits.debug_wb_data))
-  //           // print uop as well
-  //         midas.targetutils.SynthesizePrintf(printf("LDQ[%d]: uopc: %d, inst: %x, debug_inst: %x, is_rvc: %d, debug_pc: %x, iq_type: %x, fu_code: %x, unsafe: %d\n", i.U, ldq(i).bits.uop.uopc, ldq(i).bits.uop.inst, ldq(i).bits.uop.debug_inst, ldq(i).bits.uop.is_rvc, ldq(i).bits.uop.debug_pc, ldq(i).bits.uop.iq_type, ldq(i).bits.uop.fu_code, ldq(i).bits.uop.unsafe))
-  //       }
-  //     }
-  //     for (i <- 0 until numStqEntries) {
-  //       when (stq(i).valid) {
-  //         midas.targetutils.SynthesizePrintf(printf("STQ[%d]: addr_valid: %d, addr: %x, is_virtual: %d, data_valid: %d, data: %x, committed: %d, succeeded: %d, debug_wb_data: %x\n",
-  //           i.U, stq(i).bits.addr.valid, stq(i).bits.addr.bits, stq(i).bits.addr_is_virtual, stq(i).bits.data.valid, stq(i).bits.data.bits, stq(i).bits.committed, stq(i).bits.succeeded, stq(i).bits.debug_wb_data))
-  //         midas.targetutils.SynthesizePrintf(printf("STQ[%d]: uopc: %d, inst: %x, debug_inst: %x, is_rvc: %d, debug_pc: %x, iq_type: %x, fu_code: %x, unsafe: %d\n", i.U, stq(i).bits.uop.uopc, stq(i).bits.uop.inst, stq(i).bits.uop.debug_inst, stq(i).bits.uop.is_rvc, stq(i).bits.uop.debug_pc, stq(i).bits.uop.iq_type, stq(i).bits.uop.fu_code, stq(i).bits.uop.unsafe))
-  //       }
-  //     }
     }
   }
 
@@ -726,7 +765,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                                                       false.B))
 
   for (w <- 0 until memWidth) {
-    dtlb.io.req(w).valid            := exe_tlb_valid(w) && !exe_htlb_miss(w) // && !htlb.io.resp(w).phys
+    dtlb.io.req(w).valid            := exe_tlb_valid(w) && !exe_htlb_miss(w)
     dtlb.io.req(w).bits.vaddr       := exe_tlb_vaddr(w)
     dtlb.io.req(w).bits.size        := exe_size(w)
     dtlb.io.req(w).bits.cmd         := exe_cmd(w)
@@ -803,7 +842,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   val small_handle_criterium = widthMap(w => !exe_htlb_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).try_phys)
 
-  val paddr_valid = Wire(Vec(memWidth, Bool()))
   for (w <- 0 until memWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr || exe_req(w).bits.sfence.valid, "[lsu] paddrs should match.")
 
@@ -816,11 +854,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     //   printf("exe_tlb_paddr(%d): %x, htlb: %x, vaddr: %x\n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr, exe_tlb_vaddr(w))
     // }
 
-    // addr is valid if
-    paddr_valid(w) := (!exe_htlb_miss(w) && dtlb.io.req(w).bits.htlb_passthrough) || (!exe_tlb_miss(w) && dtlb.io.req(w).valid)
-    printf("addr: %x, paddr: %x, valid: %d, htlb_passthrough: %d, tlb_miss: %d, htlb_miss: %d\n", exe_tlb_vaddr(w), exe_tlb_paddr(w), paddr_valid(w), dtlb.io.req(w).bits.htlb_passthrough, exe_tlb_miss(w), exe_htlb_miss(w))
-
-    htlb.io.tlb(w).valid := paddr_valid(w) && small_handle_criterium(w) && is_handle(w)
+    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w)
     htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)(xLen-2, handleOffsetBits)
     htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w) - exe_htlb_vaddr(w)(handleBits - 1, 0)
 
@@ -865,6 +899,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val s0_executing_loads = WireInit(VecInit((0 until numLdqEntries).map(x=>false.B)))
 
 
+  val paddr_valid = Wire(Vec(memWidth, Bool()))
   for (w <- 0 until memWidth) {
     dmem_req(w).valid := false.B
     dmem_req(w).bits.uop   := NullMicroOp
@@ -873,6 +908,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     dmem_req(w).bits.is_hella := false.B
 
     io.dmem.s1_kill(w) := false.B
+
+    // addr is valid if
+    paddr_valid(w) := (!exe_htlb_miss(w) && dtlb.io.req(w).bits.htlb_passthrough) || (!exe_tlb_miss(w) && dtlb.io.req(w).valid)
+    printf("addr: %x, paddr: %x, valid: %d, htlb_passthrough: %d, tlb_miss: %d, htlb_miss: %d\n", exe_tlb_vaddr(w), exe_tlb_paddr(w), paddr_valid(w), dtlb.io.req(w).bits.htlb_passthrough, exe_tlb_miss(w), exe_htlb_miss(w))
 
     when (will_fire_load_incoming(w)) {
       dmem_req(w).valid      := paddr_valid(w) && !exe_tlb_uncacheable(w)
@@ -949,11 +988,12 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       ldq(ldq_idx).bits.addr.valid          := true.B
       ldq(ldq_idx).bits.addr.bits           := Mux(exe_htlb_miss(w), exe_htlb_vaddr(w), Mux(exe_tlb_miss(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)))
       ldq(ldq_idx).bits.uop.pdst            := exe_tlb_uop(w).pdst
-      ldq(ldq_idx).bits.addr_is_virtual     := !paddr_valid(w) // && !addr_is_handle
-      // ldq(ldq_idx).bits.addr_is_handle      := addr_is_handle
+      ldq(ldq_idx).bits.addr_is_virtual     := !paddr_valid(w)
       // is_virtual is same as below with standard boolean algebra
       // ((exe_htlb_miss(w) || !dtlb.io.req(w).htlb_passthrough) && exe_tlb_miss(w))
       ldq(ldq_idx).bits.addr_is_uncacheable := exe_tlb_uncacheable(w) && !exe_tlb_miss(w)
+
+      printf("ldq_idx: %d, addr: %x, valid: %d, is_virtual: %d, is_uncacheable: %d\n", ldq_idx, ldq(ldq_idx).bits.addr.bits, ldq(ldq_idx).bits.addr.valid, ldq(ldq_idx).bits.addr_is_virtual, ldq(ldq_idx).bits.addr_is_uncacheable)
 
       assert(!(will_fire_load_incoming(w) && ldq_incoming_e(w).bits.addr.valid),
         "[lsu] Incoming load is overwriting a valid address")
@@ -967,11 +1007,11 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       stq(stq_idx).bits.addr.valid := !pf_st(w) // Prevent AMOs from executing!
       stq(stq_idx).bits.addr.bits  := Mux(exe_htlb_miss(w), exe_htlb_vaddr(w), Mux(exe_tlb_miss(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)))
       stq(stq_idx).bits.uop.pdst   := exe_tlb_uop(w).pdst // Needed for AMOs
-      stq(stq_idx).bits.addr_is_virtual := !paddr_valid(w) // && !addr_is_handle
-      // stq(stq_idx).bits.addr_is_handle  := addr_is_handle
+      stq(stq_idx).bits.addr_is_virtual := !paddr_valid(w)
       assert(!(will_fire_sta_incoming(w) && stq_incoming_e(w).bits.addr.valid),
         "[lsu] Incoming store is overwriting a valid address")
 
+      printf("stq_idx: %d, addr: %x, valid: %d, is_virtual: %d\n", stq_idx, stq(stq_idx).bits.addr.bits, stq(stq_idx).bits.addr.valid, stq(stq_idx).bits.addr_is_virtual)
     }
 
     //-------------------------------------------------------------
@@ -1058,6 +1098,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                             !mem_tlb_miss(w)                       &&
                             !mem_stq_incoming_e(w).bits.uop.is_amo &&
                             !IsKilledByBranch(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)
+      when (htlb_enabled && false.B) {
+        midas.targetutils.SynthesizePrintf(printf("clr_bsy_valid(%d): %x, valid: %d, mem_tlb_miss: %d, is_amo: %d, killed: %d\n",
+        w.U, clr_bsy_valid(w), mem_stq_incoming_e(w).valid, mem_tlb_miss(w), mem_stq_incoming_e(w).bits.uop.is_amo, IsKilledByBranch(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)))
+      }
       clr_bsy_rob_idx (w) := mem_stq_incoming_e(w).bits.uop.rob_idx
       clr_bsy_brmask  (w) := GetNewBrMask(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)
     } .elsewhen (fired_sta_incoming(w)) {
@@ -1066,6 +1110,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                             !mem_tlb_miss(w)                        &&
                             !mem_stq_incoming_e(w).bits.uop.is_amo  &&
                             !IsKilledByBranch(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)
+      when (htlb_enabled && false.B) {
+        midas.targetutils.SynthesizePrintf(printf("clr_bsy_valid(%d): %x, valid: %d, mem_tlb_miss: %d, is_amo: %d, killed: %d\n",
+        w.U, clr_bsy_valid(w), mem_stq_incoming_e(w).valid, mem_tlb_miss(w), mem_stq_incoming_e(w).bits.uop.is_amo, IsKilledByBranch(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)))
+      }
       clr_bsy_rob_idx (w) := mem_stq_incoming_e(w).bits.uop.rob_idx
       clr_bsy_brmask  (w) := GetNewBrMask(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)
     } .elsewhen (fired_std_incoming(w)) {
@@ -1074,6 +1122,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                             !mem_stq_incoming_e(w).bits.addr_is_virtual  &&
                             !mem_stq_incoming_e(w).bits.uop.is_amo       &&
                             !IsKilledByBranch(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)
+      when (htlb_enabled && false.B) {
+        midas.targetutils.SynthesizePrintf(printf("clr_bsy_valid(%d): %x, valid: %d, mem_tlb_miss: %d, is_amo: %d, killed: %d\n",
+        w.U, clr_bsy_valid(w), mem_stq_incoming_e(w).valid, mem_tlb_miss(w), mem_stq_incoming_e(w).bits.uop.is_amo, IsKilledByBranch(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)))
+      }
       clr_bsy_rob_idx (w) := mem_stq_incoming_e(w).bits.uop.rob_idx
       clr_bsy_brmask  (w) := GetNewBrMask(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)
     } .elsewhen (fired_sfence(w)) {
@@ -1086,6 +1138,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                             !mem_tlb_miss(w)                  &&
                             !mem_stq_retry_e.bits.uop.is_amo  &&
                             !IsKilledByBranch(io.core.brupdate, mem_stq_retry_e.bits.uop)
+      when (htlb_enabled && false.B) {
+        midas.targetutils.SynthesizePrintf(printf("clr_bsy_valid(%d): %x, valid: %d, mem_tlb_miss: %d, is_amo: %d, killed: %d\n",
+        w.U, clr_bsy_valid(w), mem_stq_retry_e.valid, mem_tlb_miss(w), mem_stq_retry_e.bits.uop.is_amo, IsKilledByBranch(io.core.brupdate, mem_stq_retry_e.bits.uop)))
+      }
       clr_bsy_rob_idx (w) := mem_stq_retry_e.bits.uop.rob_idx
       clr_bsy_brmask  (w) := GetNewBrMask(io.core.brupdate, mem_stq_retry_e.bits.uop)
     }
@@ -1093,6 +1149,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     io.core.clr_bsy(w).valid := clr_bsy_valid(w) &&
                                !IsKilledByBranch(io.core.brupdate, clr_bsy_brmask(w)) &&
                                !io.core.exception && !RegNext(io.core.exception) && !RegNext(RegNext(io.core.exception))
+    when (htlb_enabled && false.B) {
+      midas.targetutils.SynthesizePrintf(printf("clr_bsy(%d): %x, valid: %d, killed: %d\n", w.U, io.core.clr_bsy(w).bits, io.core.clr_bsy(w).valid, IsKilledByBranch(io.core.brupdate, clr_bsy_brmask(w))))
+    }
     io.core.clr_bsy(w).bits  := clr_bsy_rob_idx(w)
   }
 
@@ -1568,6 +1627,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   {
     val commit_store = io.core.commit.valids(w) && io.core.commit.uops(w).uses_stq
     val commit_load  = io.core.commit.valids(w) && io.core.commit.uops(w).uses_ldq
+    when (htlb_enabled && false.B) {
+      midas.targetutils.SynthesizePrintf(printf("commit_store %d commit_load %d\n", commit_store, commit_load))
+    }
     val idx = Mux(commit_store, temp_stq_commit_head, temp_ldq_head)
     when (commit_store)
     {
