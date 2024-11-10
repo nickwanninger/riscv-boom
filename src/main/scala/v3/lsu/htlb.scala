@@ -215,6 +215,10 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     io.resp(w).try_phys := Mux(hm_enabled(w) && paddr_opt_enabled && htlb_hit(w), try_phys(w) && !cross_pages && !phys(w), false.B)
     io.resp(w).ae := Mux(hm_enabled(w) && htlb_hit(w), ae(w), false.B)
 
+    when (io.resp(w).ae) {
+      entries(hid_set(w))(OHToUInt(real_hits(w))).invalidate()
+    }
+
     // you will try phys or have phys, check if you cross pages
     when (hm_enabled(w) && (htlb_hit(w) && (try_phys(w) || phys(w)))) {
       when ((addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0))(vaddrBits-1, pgIdxBits) =/= addr(w)(vaddrBits-1, pgIdxBits)) {
