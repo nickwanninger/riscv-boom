@@ -428,8 +428,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       next_state := Mux(io.mem.req.fire, s_dump_wait, s_dump_req)
     }
     is (s_dump_wait) {
-      midas.targetutils.SynthesizePrintf(printf("[HTLB] Dumping L1 Entry %d to %x\n", hid_to_dump, hte_dst_addr))
-      next_state := Mux(mem_resp_valid, s_dump, Mux(io.mem.s2_nack, s_dump_replay_pending, s_dump_wait))
+      midas.targetutils.SynthesizePrintf(printf("[Hd%d,%x\n", hid_to_dump, hte_dst_addr))
+      next_state := Mux(mem_resp_valid, s_dump, Mux(io.mem.s2_nack, s_dump_req, s_dump_wait))
       dumped_entry_idx := Mux(mem_resp_valid, dumped_entry_idx + 1.U, dumped_entry_idx)
 
       when (next_state === s_dump) {

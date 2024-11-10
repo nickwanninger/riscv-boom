@@ -520,10 +520,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         next_state := Mux(l2_hit, s_req, s_wait2)
       }
       is (s_wait2) {
-        next_state := Mux(io.mem.s2_nack, s_htw_replay_pending, s_wait3)
+        next_state := Mux(io.mem.s2_nack, s_req, s_wait3)
       }
       is (s_wait3) {
-        next_state := Mux(mem_resp_valid, s_ready, Mux(io.mem.s2_nack, s_htw_replay_pending, s_wait3))
+        next_state := Mux(mem_resp_valid, s_ready, Mux(io.mem.s2_nack, s_req, s_wait3))
         resp_valid := mem_resp_valid
         when (mem_resp_valid) {
           midas.targetutils.SynthesizePrintf(printf(
@@ -562,8 +562,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         next_state := Mux(io.mem.req.fire, s_dump_wait, s_dump_req)
       }
       is (s_dump_wait) {
-        midas.targetutils.SynthesizePrintf(printf("[HTW] Dumping hid %x to %x (mem_resp_valid: %d)\n", hid_to_dump, hte_dst_addr, mem_resp_valid))
-        next_state := Mux(mem_resp_valid, s_dump, Mux(io.mem.s2_nack, s_dump_replay_pending, s_dump_wait))
+        midas.targetutils.SynthesizePrintf(printf("[H2Dd%x,%x,%d\n", hid_to_dump, hte_dst_addr, mem_resp_valid))
+        next_state := Mux(mem_resp_valid, s_dump, Mux(io.mem.s2_nack, s_dump_req, s_dump_wait))
 
         when (next_state === s_dump_replay_pending) {
           midas.targetutils.SynthesizePrintf(printf("[HTW] Nacked, Pending dumping %d-th L2 Entry %d\n", dumped_entry_idx, hid_to_dump))
