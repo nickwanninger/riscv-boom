@@ -302,8 +302,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
       when(s2_hit) {
         printf("[HTW] Hit with addr: %x (%d)\n", s2_hit_entry.addr, s2_hit_entry.tag)
-        // when (s2_hit_entry.phys) {
-          midas.targetutils.SynthesizePrintf(printf("Hit on physical, invalidating with Mask (of set): %x onto hit vec %x\n", r_idx, s2_hit_vec.asUInt))
+        when (s2_hit_entry.phys) {
+          // midas.targetutils.SynthesizePrintf(printf("Hit on physical, invalidating with Mask (of set): %x onto hit vec %x\n", r_idx, s2_hit_vec.asUInt))
           val mask = UIntToOH(r_idx)
           for (way <- 0 until boomParams.nL2HTLBWays) {
             midas.targetutils.SynthesizePrintf(printf("Way: %d, Valid: %x, Mask: %x\n", way.U, valid(way), mask))
@@ -311,7 +311,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
               valid(way) := valid(way) & ~mask
             }
           }
-        // }
+        }
       }
 
       io.dpath.htDumped := set_idx === nL2HTLBSets.U && state === s_dump
