@@ -200,21 +200,21 @@ class WithNMediumYukons(n: Int = 1) extends Config(
         BoomTileAttachParams(
           tileParams = BoomTileParams(
             core = BoomCoreParams(
-              fetchWidth = 8,
+              fetchWidth = 4,
               decodeWidth = 2,
-              numRobEntries = 96,
+              numRobEntries = 64,
               issueParams = Seq(
-                IssueParams(issueWidth=1, numEntries=8, iqType=IQT_MEM.litValue, dispatchWidth=2),
-                IssueParams(issueWidth=1, numEntries=8, iqType=IQT_INT.litValue, dispatchWidth=2),
-                IssueParams(issueWidth=1, numEntries=8, iqType=IQT_FP.litValue , dispatchWidth=2)),
-              numIntPhysRegisters = 100,
-              numFpPhysRegisters = 96,
-              numLdqEntries = 24,
-              numStqEntries = 24,
-              maxBrCount = 16,
-              numFetchBufferEntries = 24,
-              ftq = FtqParameters(nEntries=16),
-              nPerfCounters = 4,
+                IssueParams(issueWidth=1, numEntries=12, iqType=IQT_MEM.litValue, dispatchWidth=2),
+                IssueParams(issueWidth=2, numEntries=20, iqType=IQT_INT.litValue, dispatchWidth=2),
+                IssueParams(issueWidth=1, numEntries=16, iqType=IQT_FP.litValue , dispatchWidth=2)),
+              numIntPhysRegisters = 80,
+              numFpPhysRegisters = 64,
+              numLdqEntries = 16,
+              numStqEntries = 16,
+              maxBrCount = 12,
+              numFetchBufferEntries = 16,
+              ftq = FtqParameters(nEntries=32),
+              nPerfCounters = 6,
               fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
               nL2TLBWays=16,
               nL2TLBEntries=2048,
@@ -224,10 +224,10 @@ class WithNMediumYukons(n: Int = 1) extends Config(
               nL2HTLBEntries = 512,
             ),
             dcache = Some(
-              DCacheParams(rowBits = 128, nSets=64, nWays=8, nMSHRs=8, nTLBWays=6, nTLBSets = 16)
+              DCacheParams(rowBits = 64, nSets=64, nWays=4, nMSHRs=2, nTLBWays=6, nTLBSets = 16)
             ),
             icache = Some(
-              ICacheParams(rowBits = 128, nSets=64, nWays=8, fetchBytes=4*4)
+              ICacheParams(rowBits = 64, nSets=64, nWays=4, fetchBytes=2*4)
             ),
             tileId = i + idOffset
           ),
