@@ -98,7 +98,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
   val resp_valid = RegNext(RegInit(false.B))
 
   when (io.dpath.customCSRs.htBase =/= 0.U && state =/= next_state) {
-    midas.targetutils.SynthesizePrintf(printf("[HTW] State: %d, Next_State: %d\n", state, next_state))
+    midas.targetutils.SynthesizePrintf(printf("[H2%d,%d\n", state, next_state))
+    // midas.targetutils.SynthesizePrintf(printf("[HTW] State: %d, Next_State: %d\n", state, next_state))
   }
 
   val clock_en =
@@ -239,7 +240,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
             VecInit(Seq.fill(boomParams.nL2HTLBWays)(code.encode(entry.asUInt))),
             wmask.asBools
           )
-          midas.targetutils.SynthesizePrintf(printf("[HTW] Inserting with addr: %x into set %d, way (%x) %d (tag)\n", entry.addr, v_idx, wmask, v_tag))
+          midas.targetutils.SynthesizePrintf(printf("[Hn%x,%d,%x,%d\n", entry.addr, v_idx, wmask, v_tag))
+          // midas.targetutils.SynthesizePrintf(printf("[HTW] Inserting with addr: %x into set %d, way (%x) %d (tag)\n", entry.addr, v_idx, wmask, v_tag))
 
           val mask = UIntToOH(v_idx)
           printf("Mask: %x\n", mask)
@@ -276,7 +278,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
       io.dpath.perf.l2miss := s2_valid && !(s2_hit_vec.orR)
       when(io.dpath.perf.l2miss) {
-        midas.targetutils.SynthesizePrintf(printf("[HTW] L2 Miss\n"))
+        midas.targetutils.SynthesizePrintf(printf("[H2m\n"))
       }
       midas.targetutils.PerfCounter(io.dpath.perf.l2miss, "l2_htlb_miss", "L2 HTLB Miss")
 
@@ -306,7 +308,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           // midas.targetutils.SynthesizePrintf(printf("Hit on physical, invalidating with Mask (of set): %x onto hit vec %x\n", r_idx, s2_hit_vec.asUInt))
           val mask = UIntToOH(r_idx)
           for (way <- 0 until boomParams.nL2HTLBWays) {
-            midas.targetutils.SynthesizePrintf(printf("Way: %d, Valid: %x, Mask: %x\n", way.U, valid(way), mask))
+            // midas.targetutils.SynthesizePrintf(printf("Way: %d, Valid: %x, Mask: %x\n", way.U, valid(way), mask))
             when(s2_hit_vec(way)) {
               valid(way) := valid(way) & ~mask
             }
@@ -318,7 +320,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       io.dpath.htInvald := state === s_invalidated
 
       when (io.dpath.htDumped) {
-        midas.targetutils.SynthesizePrintf(printf("[HTW] Finished dumping\n"))
+        midas.targetutils.SynthesizePrintf(printf("[H2D\n"))
       }
 
       val pipeline_stage = RegInit(0.U(2.W))
@@ -370,14 +372,14 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
         when(ds2_hit && dr_valid_vec(way)) {
           hid_to_dump := Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx(idxBits-1,0))
-          midas.targetutils.SynthesizePrintf(printf(
-            "[HTW]  L2Entry: %d: %d, Valid(%d) %x - %x\n",
-            set_idx(idxBits-1,0), 
-            way,
-            dr_valid_vec(way),
-            Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx(idxBits-1,0)),
-            ds2_hte.addr
-          ))
+          // midas.targetutils.SynthesizePrintf(printf(
+          //   "[HTW]  L2Entry: %d: %d, Valid(%d) %x - %x\n",
+          //   set_idx(idxBits-1,0), 
+          //   way,
+          //   dr_valid_vec(way),
+          //   Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx(idxBits-1,0)),
+          //   ds2_hte.addr
+          // ))
           next_state := s_dump_req
           l2_plru.access(set_idx(idxBits-1,0), way)
         } .elsewhen(ds2_valid) {
@@ -412,13 +414,13 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val htInval = io.dpath.customCSRs.htInval
       when (htInval.orR) {
         when (htInval(handleBits -1, 0) === ((BigInt(1) << handleBits) - 1).U) {
-          midas.targetutils.SynthesizePrintf(printf("[HTW] Invalidating all entries\n"))
+          midas.targetutils.SynthesizePrintf(printf("[HI\n"))
           for (way <- 0 until boomParams.nL2HTLBWays) {
             valid(way) := 0.U
           }
           next_state := s_invalidated
         } .otherwise {
-          midas.targetutils.SynthesizePrintf(printf("[HTW] Invalidating %x\n", htInval(handleBits -1, 0)))
+          midas.targetutils.SynthesizePrintf(printf("[Hi%x\n", htInval(handleBits -1, 0)))
 
           val (i_tag, i_idx) = Split(htInval(handleBits-1, 0), idxBits)
 
@@ -467,7 +469,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     
       when (reset.asBool || io.dpath.clear_htlb) {
         when (io.dpath.clear_htlb) {
-          midas.targetutils.SynthesizePrintf(printf("[HTW] Clearing HTLB\n"))
+          midas.targetutils.SynthesizePrintf(printf("[H2C\n"))
         }
         for (way <- 0 until boomParams.nL2HTLBWays) {
           valid(way) := 0.U
@@ -505,16 +507,21 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         victim_hte := Mux(io.requestor.evict.valid, io.requestor.evict.bits, victim_hte)
 
         when (next_state === s_dump) {
-          midas.targetutils.SynthesizePrintf(printf("[HTW] Starting to dump L2\n"))
+          midas.targetutils.SynthesizePrintf(printf("[H2d\n"))
         }
       }
       is(s_req) {
         next_state := Mux(io.mem.req.fire, s_wait1, s_req)
         midas.targetutils.SynthesizePrintf(printf(
-          "[HTW] -> [Mem] Looking up HID: %d at %x\n",
+          "[H2l%d,%x\n",
           (io.mem.req.bits.addr - htBase)/8.U(xLen.W),
           io.mem.req.bits.addr
         ))
+        // midas.targetutils.SynthesizePrintf(printf(
+        //   "[HTW] -> [Mem] Looking up HID: %d at %x\n",
+        //   (io.mem.req.bits.addr - htBase)/8.U(xLen.W),
+        //   io.mem.req.bits.addr
+        // ))
       }
       is(s_wait1) {
         next_state := Mux(l2_hit, s_req, s_wait2)
@@ -527,7 +534,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         resp_valid := mem_resp_valid
         when (mem_resp_valid) {
           midas.targetutils.SynthesizePrintf(printf(
-            "[HTW] Found HTE - Frozen: Reserved: %x, Addr: %x, try_phys: %d, ae: %d\n",
+            "[H2n%x,%x,%d,%d\n",
             found_hte.reserved,
             found_hte.addr,
             found_hte.try_phys,
@@ -537,17 +544,17 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
       is(s_victim1) {
         next_state := s_victim2
-        midas.targetutils.SynthesizePrintf(printf("[HTW] Inserting Victim Entry: HID: %d, Addr: %x, Phys: %d, try_phys: %d, ae: %d\n", victim_hte.hid, victim_hte.addr, victim_hte.phys, victim_hte.try_phys, victim_hte.ae))
+        midas.targetutils.SynthesizePrintf(printf("[H2n%d,%x,%d,%d,%d\n", victim_hte.hid, victim_hte.addr, victim_hte.phys, victim_hte.try_phys, victim_hte.ae))
       }
       is(s_victim2) {
         next_state := s_victim3
       }
       is(s_victim3) {
         next_state := s_ready
-        midas.targetutils.SynthesizePrintf(printf("[HTW] Inserted Victim Entry: HID: %d, Addr: %x, Phys: %d, try_phys: %d, ae: %d\n", victim_hte.hid, victim_hte.addr, victim_hte.phys, victim_hte.try_phys, victim_hte.ae))
+        midas.targetutils.SynthesizePrintf(printf("[H2v%d,%x,%d,%d,%d\n", victim_hte.hid, victim_hte.addr, victim_hte.phys, victim_hte.try_phys, victim_hte.ae))
       }
       is(s_invalidated) {
-        midas.targetutils.SynthesizePrintf(printf("[HTW] Finished invalidating\n"))
+        midas.targetutils.SynthesizePrintf(printf("[HiI\n"))
         next_state := s_ready
       }
       is (s_dump) {
@@ -558,7 +565,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         }
       }
       is (s_dump_req) {
-        midas.targetutils.SynthesizePrintf(printf("[HTW] Trying to dump L2 Entry %d to %x\n", hid_to_dump, hte_dst_addr))
+        midas.targetutils.SynthesizePrintf(printf("[H2d%d,%x\n", hid_to_dump, hte_dst_addr))
         next_state := Mux(io.mem.req.fire, s_dump_wait, s_dump_req)
       }
       is (s_dump_wait) {
@@ -566,9 +573,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         next_state := Mux(mem_resp_valid, s_dump, Mux(io.mem.s2_nack, s_dump_req, s_dump_wait))
 
         when (next_state === s_dump_replay_pending) {
-          midas.targetutils.SynthesizePrintf(printf("[HTW] Nacked, Pending dumping %d-th L2 Entry %d\n", dumped_entry_idx, hid_to_dump))
+          midas.targetutils.SynthesizePrintf(printf("[H2N%d,%d\n", dumped_entry_idx, hid_to_dump))
         }. elsewhen(next_state === s_dump) {
-          midas.targetutils.SynthesizePrintf(printf("[HTW] Finished dumping %d-th L2 Entry %d\n", dumped_entry_idx, hid_to_dump))
+          midas.targetutils.SynthesizePrintf(printf("[H2D%d,%d\n", dumped_entry_idx, hid_to_dump))
           dumped_entry_idx := dumped_entry_idx + 1.U
         }
       }
@@ -582,10 +589,16 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         
     when (resp_valid) {
       midas.targetutils.SynthesizePrintf(printf(
-        "[HTW] -> [HTLB] Found HID %d to be %x\n",
+        "[H2h%d,%x\n",
         hid,
         io.requestor.resp.bits.hte.addr
       ))
+      // midas.targetutils.SynthesizePrintf(printf(
+      //   "[HTW] -> [HTLB] Found HID %d to be %x\n",
+      //   hid,
+      //   io.requestor.resp.bits.hte.addr
+      // ))
+
     }
     
     // Hit Handling Logic or HTW response logic
@@ -624,7 +637,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.mem.s2_kill := false.B
 
     when (io.mem.s2_xcpt.asUInt =/= 0.U) {
-      midas.targetutils.SynthesizePrintf(printf("[HTW] Exception in HTW: %x\n", io.mem.s2_xcpt.asUInt))
+      midas.targetutils.SynthesizePrintf(printf("[H2E%x\n", io.mem.s2_xcpt.asUInt))
     }
   }
 
