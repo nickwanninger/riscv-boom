@@ -175,11 +175,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   for (w <- 0 until memWidth) {
     when(io.req(w).valid && hm_enabled(w)) {
       when(real_hits(w).orR) {
-        // midas.targetutils.SynthesizePrintf(printf(
-        //   "[HTLB] Hit (%x): Tag: %x in Set %d, Way %d\n", hid(w), hid_tag(w), hid_set(w), OH1ToUInt(real_hits(w))
-        // ))
-        midas.targetutils.SynthesizePrintf(printf(
-          "[Hh%x,%x,%d,%d\n", hid(w), hid_tag(w), hid_set(w), OH1ToUInt(real_hits(w))
+        midas.targetutils.SynthesizePrintf(
+          printf("[Hh%x,%x,%d,%d\n", hid(w), hid_tag(w), hid_set(w), OH1ToUInt(real_hits(w))
         ))
         l1_plru.access(hid_set(w), OH1ToUInt(real_hits(w)))
       }
@@ -208,7 +205,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val effective_address = Cat(ea_sign, sum(vaddrBits - 1, 0)).asUInt
     val cross_pages = WireDefault(false.B)
 
-    // val ae_haddr = io.req(w).bits.haddr(xLen - 2, handleOffsetBits) // io.htBase + hid(w) * ((new HTE().getWidth.U) / 8.U((log2Ceil(new HTE().getWidth) + 1).W))
     val paddr_opt_enabled = io.htBase(xLen-1)
     io.req(w).ready := true.B
     io.resp(w).miss := do_refill || htlb_miss(w) || (htlb_hit(w) && cross_pages && phys(w))
@@ -219,7 +215,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     io.resp(w).try_phys := Mux(hm_enabled(w) && paddr_opt_enabled && htlb_hit(w), try_phys(w) && !cross_pages && !phys(w), false.B)
     io.resp(w).ae := Mux(hm_enabled(w) && htlb_hit(w), ae(w), false.B)
 
-    when (io.resp(w).ae) {
+    when (RegNext(io.resp(w).ae)) {
       entries(hid_set(w))(OHToUInt(real_hits(w))).invalidate()
     }
 
@@ -232,15 +228,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
         entries(hid_set(w))(OHToUInt(real_hits(w))).inval_try_phys()
       }
     }
-    /*
-    when (!(do_refill || htlb_miss(w)) && hm_enabled(w) && try_phys(w)) {
-      when ((addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0))(vaddrBits-1, pgIdxBits) =/= addr(w)(vaddrBits-1, pgIdxBits)) {
-        midas.targetutils.SynthesizePrintf(printf("[HTLB] object %d at vaddr %x accessed at offset %x crossed page boundaries\n", hid(w), addr(w), io.req(w).bits.haddr(handleOffsetBits - 1, 0)))
-        cross_pages := true.B
-        entries(hid_set(w))(OHToUInt(real_hits(w))).inval_try_phys()
-      }
-    }
-    */
 
     when(!io.resp(w).miss && io.req(w).valid && hm_enabled(w)) {
       midas.targetutils.SynthesizePrintf(printf(
@@ -481,12 +468,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
   }
 
-  // when (io.mem.s2_xcpt.asUInt =/= 0.U) {
-  //   midas.targetutils.SynthesizePrintf(printf("[HTLB] Exception in HTLB: %x\n", io.mem.s2_xcpt.asUInt))
-  //   next_state := s_ready
-  //   // assert(io.mem.s2_xcpt.asUInt === 0.U, "HTLB dumping to memory failed?!?")
-  // }
-
+  // Reset Logic
   when(reset.asBool || io.clear_htlb) {
     when (io.clear_htlb) {
       midas.targetutils.SynthesizePrintf(printf("[Hc\n"))
@@ -494,6 +476,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     entries.foreach(_.foreach(_.invalidate()))
   }
 
+  // Invalidation Logic
   when (io.htInval.orR) {
     when (io.htInval === ((BigInt(1) << handleBits) - 1).U) {
       midas.targetutils.SynthesizePrintf(printf("[HI\n"))
