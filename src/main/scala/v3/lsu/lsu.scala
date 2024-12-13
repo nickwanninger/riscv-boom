@@ -724,6 +724,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val is_ht_infinite = io.core.htSize === 0.U
   val exe_htlb_passthr = widthMap(w => Mux(htlb_enabled, 
                                           Mux(will_fire_hella_incoming(w), true.B, !((is_ht_infinite || (!is_ht_infinite && hid(w) < io.core.htSize)) && is_handle(w))), true.B))
+  htlb.io.ht_size := io.core.htSize
+  htlb.io.htlb_enabled := htlb_enabled
 
   for (w <- 0 until memWidth) {
     htlb.io.req(w).valid            := exe_htlb_valid(w)

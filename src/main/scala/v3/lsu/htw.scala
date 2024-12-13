@@ -57,6 +57,7 @@ class HTLBHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
   val evict_resp = Input(Bool())
   val l1_dumped = Output(Bool())
   val l1miss = Output(Bool())
+  val htlb_enabled = Output(Bool())
 }
 
 class HTWPerfEvents(implicit p: Parameters) extends BoomBundle()(p) {

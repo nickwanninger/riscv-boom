@@ -50,6 +50,8 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val ptw_done = Input(Bool())
     val clear_htlb = Input(Bool())
     val miss_rdy = Output(Bool())
+    val ht_size = Input(UInt(xLen.W))
+    val htlb_enabled = Input(Bool())
   })
 
   class HTLBEntryData() extends Bundle() {
@@ -100,6 +102,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   }
 
   // Utilities
+  io.htw.htlb_enabled := io.htlb_enabled
   def widthMap[T <: Data](f: Int => T) = VecInit((0 until memWidth).map(f))
   val hm_enabled = widthMap(w => !io.req(w).bits.passthrough)
   val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleOffsetBits))
@@ -112,7 +115,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val s_ready :: s_request :: s_wait :: s_victim_req :: s_victim_wait :: s_dump :: s_dump_req :: s_dump_wait :: s_dumped :: s_dump_replay_pending :: Nil = Enum(10)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
-  state := Mux(io.htBase.orR, OptimizationBarrier(next_state), s_ready)
+  state := Mux(io.htBase.orR && io.htlb_enabled, OptimizationBarrier(next_state), s_ready)
 
   when (io.htBase =/= 0.U && state =/= next_state) {
     // midas.targetutils.SynthesizePrintf(printf("[HTLB] State: %d, Next_State: %d\n", state, next_state))
@@ -184,12 +187,13 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   }
 
   // More Utilities
+  val paddr_opt_enabled = io.htBase(xLen-1)
   val addr = widthMap(w =>
     entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).addr)
   val phys = widthMap(w =>
     entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).phys)
   val try_phys = widthMap(w =>
-    entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).try_phys)
+    entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).try_phys && !entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).phys && paddr_opt_enabled)
   val ae = widthMap(w =>
     entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).ae)
 
@@ -212,7 +216,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
                           Mux (!io.resp(w).miss, 
                                addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0), 0.U))
     io.resp(w).phys := Mux(hm_enabled(w) && htlb_hit(w), phys(w), false.B)
-    io.resp(w).try_phys := Mux(hm_enabled(w) && paddr_opt_enabled && htlb_hit(w), try_phys(w) && !cross_pages && !phys(w), false.B)
+    io.resp(w).try_phys := Mux(hm_enabled(w) && htlb_hit(w), try_phys(w) && !cross_pages, false.B)
     io.resp(w).ae := Mux(hm_enabled(w) && htlb_hit(w), ae(w), false.B)
 
     when (RegNext(io.resp(w).ae)) {
@@ -253,7 +257,6 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   for (w <- 0 until memWidth) {
     when(io.req(w).fire && htlb_miss(w) && state === s_ready &&
          hm_enabled(w)) {
-      state := s_request
       hid_req := hid(w)
     }
 
@@ -271,6 +274,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   }
 
 
+  val have_victim = WireDefault(false.B)
   // Refill L1 HTLB once L2 HTLB responds
   when(do_refill) {
     val newEntry = Wire(new HTLBEntryData)
@@ -308,7 +312,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val victim_line = entries(r_idx)(repl_way)
     // printf("[HTLB] Replacing Entry: Valid: %d, Tag: %d, Addr: %x, Phys: %d\n", e.valid, e.tag, e.getData().addr, e.getData().phys)
     // make a copy of the victim entry, and set the victim flag to notify the L2 HTLB
-    state := Mux(victim_line.valid, s_victim_req, s_ready)
+    have_victim := true.B
 
     victim_entry.addr := victim_line.data.asTypeOf(new HTLBEntryData).addr
     victim_entry.phys := victim_line.data.asTypeOf(new HTLBEntryData).phys
@@ -367,7 +371,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       //   // entry.immovable
       // ))
       hid_to_dump := Cat(entries(set_idx(idxBits-1,0))(way).tag, set_idx(idxBits - 1, 0))
-      state := s_dump_req
+      next_state := s_dump_req
     }
     l1_plru.access(set_idx(idxBits-1,0), way)
   }
@@ -410,7 +414,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   switch (state) {
     is (s_ready) {
-      next_state := Mux(io.htDump.orR, s_dump, s_ready)
+      next_state := Mux(io.htDump.orR, s_dump, Mux(have_victim, s_victim_req, Mux(io.req(0).fire && htlb_miss(0), s_request, s_ready)))
 
       when (next_state === s_dump) {
         midas.targetutils.SynthesizePrintf(printf("[HD\n"))
