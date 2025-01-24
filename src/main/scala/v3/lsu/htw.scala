@@ -58,6 +58,7 @@ class HTLBHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
   val l1_dumped = Output(Bool())
   val l1miss = Output(Bool())
   val htlb_enabled = Output(Bool())
+  val pht_enabled = Output(Bool())
 }
 
 class HTWPerfEvents(implicit p: Parameters) extends BoomBundle()(p) {
@@ -91,7 +92,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   val l2_refill_wire = Wire(Bool())
-  state := Mux(io.dpath.customCSRs.htBase =/= 0.U, OptimizationBarrier(next_state), s_ready)
+  state := Mux(io.dpath.customCSRs.htBase =/= 0.U && io.requestor.htlb_enabled, OptimizationBarrier(next_state), s_ready)
 
   // de-chicken bit the htBase CSR
   val htBase = io.dpath.customCSRs.htBase(62, 0)
@@ -515,7 +516,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         next_state := Mux(io.mem.req.fire, s_wait1, s_req)
         midas.targetutils.SynthesizePrintf(printf(
           "[H2l%d,%x\n",
-          (io.mem.req.bits.addr - htBase)/8.U(xLen.W),
+          (io.mem.req.bits.addr - htBase)/8.U((xLen - 1).W),
           io.mem.req.bits.addr
         ))
         // midas.targetutils.SynthesizePrintf(printf(
@@ -616,7 +617,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.mem.keep_clock_enabled := false.B
 
     io.mem.req.valid := state === s_req  || state === s_dump_req
-    io.mem.req.bits.phys := false.B
+    io.mem.req.bits.phys := io.requestor.pht_enabled
     io.mem.req.bits.cmd := Mux(state === s_dump_req, M_XWR, M_XRD)
     io.mem.req.bits.size := log2Ceil(xLen / 8).U
     io.mem.req.bits.signed := false.B

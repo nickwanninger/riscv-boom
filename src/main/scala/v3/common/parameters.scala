@@ -104,6 +104,7 @@ case class BoomCoreParams(
   enableMemtracePrintf: Boolean = false,
 
   enableHandleSupport: Int = 0,
+  enablePHTSupport: Int = 0,
   nL1HTLBWays: Int = 4,
   nL1HTLBEntries: Int = 8,
   nL2HTLBWays: Int = 8,
@@ -327,4 +328,5 @@ trait HasBoomCoreParameters extends freechips.rocketchip.tile.HasCoreParameters
   val corePgIdxBits = pgIdxBits
 
   val ENABLE_HTLB = boomParams.enableHandleSupport
+  val ENABLE_PHT = boomParams.enablePHTSupport
 }

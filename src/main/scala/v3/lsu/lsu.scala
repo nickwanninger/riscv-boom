@@ -741,6 +741,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val ae_htw_addrs = widthMap(w => Cat((1 << (maxSVAddrBits - 1 - handleBits)).U((xLen - handleBits).W), htlb.io.req(w).bits.haddr(xLen - 2, handleOffsetBits)))
   for (w <- 0 until memWidth) {
     when (htlb.io.resp(w).ae) {
+      assert (!ENABLE_PHT.B, "How did we get an AE with PHT enabled?")
       // midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] AE on haddr %x -> vaddr %x\n", exe_htlb_vaddr(w), ae_htw_addrs(w)))
       midas.targetutils.SynthesizePrintf(printf("He%x,%x\n", exe_htlb_vaddr(w), ae_htw_addrs(w)))
     }
@@ -813,7 +814,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     Mux(pf_st(w), rocket.Causes.store_page_fault.U,
     Mux(ae_ld(w) || ae_htw_ld(w), rocket.Causes.load_access.U,
                   rocket.Causes.store_access.U)))))))
-  val mem_xcpt_vaddrs = RegNext(Mux(widthMap(w => htlb.io.resp(w).ae).reduce(_||_) && htlb_enabled, ae_htw_addrs, exe_tlb_vaddr))
+  val mem_xcpt_vaddrs = RegNext(Mux(widthMap(w => htlb.io.resp(w).ae).reduce(_||_) && htlb_enabled && !ENABLE_PHT.B, ae_htw_addrs, exe_tlb_vaddr))
+  // val mem_xcpt_vaddrs = RegNext(exe_htlb_vaddr)
 
   for (w <- 0 until memWidth) {
     assert (!(dtlb.io.req(w).valid && exe_tlb_uop(w).is_fence), "Fence is pretending to talk to the TLB")
@@ -1086,8 +1088,14 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val mem_stdf_uop         = RegNext(UpdateBrMask(io.core.brupdate, io.core.fp_stdata.bits.uop))
 
 
-  val mem_tlb_miss             = RegNext(exe_tlb_miss)
-  printf("mem_tlb_miss: %b\n", mem_tlb_miss(0))
+  val mem_tlb_miss             = if (ENABLE_PHT > 0) {
+    widthMap(exe_tlb_miss)
+  } else {
+    widthMap(w => RegNext(exe_tlb_miss(w)) && !fired_hella_incoming(w))
+  }
+  when (htlb_enabled) {
+    midas.targetutils.SynthesizePrintf(printf("mmiss: %x,%x,%x\n", mem_tlb_miss(0), exe_tlb_miss(0), fired_hella_incoming(0)))
+  }
   val mem_tlb_uncacheable      = RegNext(exe_tlb_uncacheable)
   val mem_paddr                = RegNext(widthMap(w => dmem_req(w).bits.addr))
 

@@ -52,6 +52,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val miss_rdy = Output(Bool())
     val ht_size = Input(UInt(xLen.W))
     val htlb_enabled = Input(Bool())
+    val pht_enabled = Input(Bool())
   })
 
   class HTLBEntryData() extends Bundle() {
@@ -103,6 +104,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   // Utilities
   io.htw.htlb_enabled := io.htlb_enabled
+  io.htw.pht_enabled := io.pht_enabled
   def widthMap[T <: Data](f: Int => T) = VecInit((0 until memWidth).map(f))
   val hm_enabled = widthMap(w => !io.req(w).bits.passthrough)
   val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleOffsetBits))
