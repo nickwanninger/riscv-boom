@@ -537,10 +537,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         when (mem_resp_valid) {
           midas.targetutils.SynthesizePrintf(printf(
             "[H2n%x,%x,%d,%d\n",
-            found_hte.reserved,
-            found_hte.addr,
-            found_hte.try_phys,
-            found_hte.ae
+            pte.reserved,
+            pte.addr,
+            pte.try_phys,
+            pte.ae
           ))
         }
       }

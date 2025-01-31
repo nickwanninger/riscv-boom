@@ -274,7 +274,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   htlb.io.ptw_done <> io.ptw_done
   htlb.io.clear_htlb := io.core.clear_htlb
 
-  // TODO: condition this on privilege level when we get to linux and running things not in S
   val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase =/= 0.U && (io.core.status.dprv + 1.U) <= ENABLE_HTLB.U
 
   val clear_store     = WireInit(false.B)
@@ -306,6 +305,12 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   var st_enq_idx = stq_tail
 
   val stq_nonempty = (0 until numStqEntries).map{ i => stq(i).valid }.reduce(_||_) =/= 0.U
+  val ldq_nonempty = (0 until numLdqEntries).map{ i => ldq(i).valid }.reduce(_||_) =/= 0.U
+
+  val counter = RegInit(0.U(9.W))
+  counter := Mux(io.core.commit_load_at_rob_head && !ldq_nonempty && htlb_enabled, Mux(counter === 511.U, 0.U, counter + 1.U), 0.U)
+
+  assert(counter =/= 511.U, "Trying to commit loads that aren't there")
 
   var ldq_full = Bool()
   var stq_full = Bool()
@@ -562,24 +567,26 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         can_fire_sfence.asUInt, can_fire_release.asUInt, can_fire_load_retry.asUInt, can_fire_sta_retry.asUInt,
         can_fire_store_commit.asUInt, can_fire_load_wakeup.asUInt, block_load_wakeup))
 
-      midas.targetutils.SynthesizePrintf(printf("lqe%b,%b,%b,%b,%b,%b,%b,%b\n", ldq_retry_e.valid, ldq_retry_e.bits.addr.valid, ldq_retry_e.bits.addr_is_virtual, p1_block_load_mask(ldq_retry_idx), p2_block_load_mask(ldq_retry_idx), dtlb.io.miss_rdy, store_needs_order, ldq_retry_e.bits.order_fail))
+      midas.targetutils.SynthesizePrintf(printf("lqe%b,%b,%b,%b,%b,%b,%b,%b,%b\n", ldq_retry_e.valid, ldq_retry_e.bits.addr.valid, ldq_retry_e.bits.addr_is_virtual, p1_block_load_mask(ldq_retry_idx), p2_block_load_mask(ldq_retry_idx), dtlb.io.miss_rdy, htlb.io.miss_rdy, store_needs_order, ldq_retry_e.bits.order_fail))
 
-      midas.targetutils.SynthesizePrintf(printf("sqe%b,%b,%b,%b,%d\n", stq_retry_e.valid, stq_retry_e.bits.addr.valid, stq_retry_e.bits.addr_is_virtual, dtlb.io.miss_rdy, !(widthMap(i => (i != memWidth-1).B && can_fire_std_incoming(i) && stq_incoming_idx(i) === stq_retry_idx).reduce(_||_))))
+      midas.targetutils.SynthesizePrintf(printf("sqe%b,%b,%b,%b,%b,%d\n", stq_retry_e.valid, stq_retry_e.bits.addr.valid, stq_retry_e.bits.addr_is_virtual, dtlb.io.miss_rdy, htlb.io.miss_rdy, !(widthMap(i => (i != memWidth-1).B && can_fire_std_incoming(i) && stq_incoming_idx(i) === stq_retry_idx).reduce(_||_))))
 
       midas.targetutils.SynthesizePrintf(printf("sqc%b,%b,%b,%b,%b,%b,%b,%b,%b\n", stq_commit_e.valid, stq_commit_e.bits.uop.is_fence, mem_xcpt_valid, stq_commit_e.bits.uop.exception, stq_commit_e.bits.committed, stq_commit_e.bits.uop.is_amo, stq_commit_e.bits.addr.valid, stq_commit_e.bits.addr_is_virtual, stq_commit_e.bits.data.valid))
 
       midas.targetutils.SynthesizePrintf(printf("lqw%b,%b,%b,%b,%b,%b,%b,%b,%b,%b,%b,%b,%b\n", ldq_wakeup_e.valid, ldq_wakeup_e.bits.addr.valid, ldq_wakeup_e.bits.succeeded, ldq_wakeup_e.bits.addr_is_virtual, ldq_wakeup_e.bits.executed, ldq_wakeup_e.bits.order_fail, p1_block_load_mask(ldq_wakeup_idx), p2_block_load_mask(ldq_wakeup_idx), store_needs_order, block_load_wakeup, io.core.commit_load_at_rob_head, ldq_head === ldq_wakeup_idx, ldq_wakeup_e.bits.st_dep_mask.asUInt === 0.U))
+      // midas.targetutils.SynthesizePrintf(printf("lh:%d, lt:%d, sh:%d, st:%d, sch:%d, seh:%d, lqf: %b, sqf: %b, commit: %x\n", ldq_head, ldq_tail, stq_head, stq_tail, stq_commit_head, stq_execute_head, ldq_full, stq_full, io.core.commit.valids.asUInt))
+    }
 
-      for (i <- 0 until numLdqEntries) {
-        when (ldq(i).valid) {
-          midas.targetutils.SynthesizePrintf(printf("lq%d,%d,%x,%d,%x,%d,%d,%d,%d,%d,%d,%x\n", i.U, ldq(i).valid, ldq(i).bits.addr.bits, ldq(i).bits.youngest_stq_idx, ldq(i).bits.st_dep_mask, ldq(i).bits.addr.valid, ldq(i).bits.executed, ldq(i).bits.succeeded, ldq(i).bits.order_fail, ldq(i).bits.observed, ldq(i).bits.forward_std_val, ldq(i).bits.haddr))
-        }
+    // printf("Cycle: %d\n", cycle)
+    for (i <- 0 until numLdqEntries) {
+      when (ldq(i).valid) {
+        midas.targetutils.SynthesizePrintf(printf("lq%d,%d,%x,%d,%x,%d,%d,%d,%d,%d,%d,%x\n", i.U, ldq(i).valid, ldq(i).bits.addr.bits, ldq(i).bits.youngest_stq_idx, ldq(i).bits.st_dep_mask, ldq(i).bits.addr.valid, ldq(i).bits.executed, ldq(i).bits.succeeded, ldq(i).bits.order_fail, ldq(i).bits.observed, ldq(i).bits.forward_std_val, ldq(i).bits.haddr))
       }
+    }
 
-      for (i <- 0 until numStqEntries) {
-        when (stq(i).valid) {
-          midas.targetutils.SynthesizePrintf(printf("sq%d,%d,%x,%d,%d,%d,%d,%d,%x\n", i.U, stq(i).valid, stq(i).bits.addr.bits, stq(i).bits.addr_is_virtual, stq(i).bits.addr.valid, stq(i).bits.data.valid, stq(i).bits.committed, stq(i).bits.succeeded, stq(i).bits.haddr))
-        }
+    for (i <- 0 until numStqEntries) {
+      when (stq(i).valid) {
+        midas.targetutils.SynthesizePrintf(printf("sq%d,%d,%x,%d,%d,%d,%d,%d,%x\n", i.U, stq(i).valid, stq(i).bits.addr.bits, stq(i).bits.addr_is_virtual, stq(i).bits.addr.valid, stq(i).bits.data.valid, stq(i).bits.committed, stq(i).bits.succeeded, stq(i).bits.haddr))
       }
     }
   }
@@ -726,6 +733,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                                           Mux(will_fire_hella_incoming(w), true.B, !((is_ht_infinite || (!is_ht_infinite && hid(w) < io.core.htSize)) && is_handle(w))), true.B))
   htlb.io.ht_size := io.core.htSize
   htlb.io.htlb_enabled := htlb_enabled
+  htlb.io.pht_enabled := htlb_enabled && ENABLE_PHT.B
 
   for (w <- 0 until memWidth) {
     htlb.io.req(w).valid            := exe_htlb_valid(w)
@@ -738,7 +746,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   }
   htlb.io.kill                    := exe_kill.reduce(_||_)
 
-  val ae_htw_addrs = widthMap(w => Cat((1 << (maxSVAddrBits - 1 - handleBits)).U((xLen - handleBits).W), htlb.io.req(w).bits.haddr(xLen - 2, handleOffsetBits)))
+  // val ae_htw_addrs = widthMap(w => Cat((1 << (maxSVAddrBits - 1 - handleBits)).U((xLen - handleBits).W), htlb.io.req(w).bits.haddr(xLen - 2, handleOffsetBits)))
+  val ae_htw_addrs = widthMap(w => io.core.htBase + 8.U*htlb.io.req(w).bits.haddr(xLen - 2, handleOffsetBits))
+  // val ae_htw_addrs = widthMap(w => exe_htlb_vaddr(w) & ~((1.U << (xLen - 1))))
   for (w <- 0 until memWidth) {
     when (htlb.io.resp(w).ae) {
       assert (!ENABLE_PHT.B, "How did we get an AE with PHT enabled?")
@@ -783,7 +793,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
     when (dtlb.io.req(w).valid) {
       when (htlb_enabled) {
-        midas.targetutils.SynthesizePrintf(printf("t%x\n", dtlb.io.req(w).bits.vaddr))
+        midas.targetutils.SynthesizePrintf(printf("t%x,%d\n", dtlb.io.req(w).bits.vaddr, dtlb.io.req(w).bits.htlb_passthrough))
       }
     }
   }
@@ -1167,7 +1177,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     io.core.clr_bsy(w).valid := clr_bsy_valid(w) &&
                                !IsKilledByBranch(io.core.brupdate, clr_bsy_brmask(w)) &&
                                !io.core.exception && !RegNext(io.core.exception) && !RegNext(RegNext(io.core.exception))
-    when (htlb_enabled && false.B) {
+    when (htlb_enabled) {
       midas.targetutils.SynthesizePrintf(printf("clr_bsy(%d): %x, valid: %d, killed: %d\n", w.U, io.core.clr_bsy(w).bits, io.core.clr_bsy(w).valid, IsKilledByBranch(io.core.brupdate, clr_bsy_brmask(w))))
     }
     io.core.clr_bsy(w).bits  := clr_bsy_rob_idx(w)
@@ -1604,6 +1614,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         stq(i).valid           := false.B
         stq(i).bits.addr.valid := false.B
         stq(i).bits.data.valid := false.B
+        stq(i).bits.committed  := false.B
+        stq(i).bits.succeeded  := false.B
+        stq(i).bits.haddr      := 0.U
+        stq(i).bits.addr_is_virtual := false.B
         st_brkilled_mask(i)    := true.B
       }
     }
@@ -1622,6 +1636,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       {
         ldq(i).valid           := false.B
         ldq(i).bits.addr.valid := false.B
+        ldq(i).bits.executed := false.B
+        ldq(i).bits.succeeded := false.B
+        ldq(i).bits.haddr := 0.U  // Clear handle address state
+        ldq(i).bits.addr_is_virtual := false.B
       }
     }
   }

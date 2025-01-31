@@ -108,6 +108,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   def widthMap[T <: Data](f: Int => T) = VecInit((0 until memWidth).map(f))
   val hm_enabled = widthMap(w => !io.req(w).bits.passthrough)
   val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleOffsetBits))
+  // val hid = widthMap(w => Cat(0.U(15.W), io.req(w).bits.haddr(19, 4) % io.ht_size))
   val idxBits = log2Ceil(cfg.nSets)
 
   // L1 TLB Entries
@@ -211,17 +212,18 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val effective_address = Cat(ea_sign, sum(vaddrBits - 1, 0)).asUInt
     val cross_pages = WireDefault(false.B)
 
-    val paddr_opt_enabled = io.htBase(xLen-1)
     io.req(w).ready := true.B
     io.resp(w).miss := do_refill || htlb_miss(w) || (htlb_hit(w) && cross_pages && phys(w))
     io.resp(w).addr := Mux(!hm_enabled(w), effective_address,
                           Mux (!io.resp(w).miss, 
+                              //  io.req(w).bits.haddr(xLen - 2, 0), 0.U))
                                addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0), 0.U))
     io.resp(w).phys := Mux(hm_enabled(w) && htlb_hit(w), phys(w), false.B)
     io.resp(w).try_phys := Mux(hm_enabled(w) && htlb_hit(w), try_phys(w) && !cross_pages, false.B)
     io.resp(w).ae := Mux(hm_enabled(w) && htlb_hit(w), ae(w), false.B)
 
-    when (RegNext(io.resp(w).ae)) {
+    when (io.resp(w).ae) {
+      midas.targetutils.SynthesizePrintf(printf("[Haei\n"))
       entries(hid_set(w))(OHToUInt(real_hits(w))).invalidate()
     }
 
@@ -483,6 +485,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   }
 
   // Invalidation Logic
+  // NOTE: does this need to reset the state to s_ready? we already fence before/after the inval in the runtime.
   when (io.htInval.orR) {
     when (io.htInval === ((BigInt(1) << handleBits) - 1).U) {
       midas.targetutils.SynthesizePrintf(printf("[HI\n"))
