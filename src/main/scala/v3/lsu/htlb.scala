@@ -36,7 +36,7 @@ case class HTLBConfig(
     nWays: Int
 )
 
-class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
+class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val io = IO(new Bundle {
     val req = Flipped(Vec(memWidth, Decoupled(new HTLBReq)))
     val resp = Vec(memWidth, new HTLBResp)
@@ -303,26 +303,26 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     // ))
 
     val (r_tag, r_idx) = Split(hid_req, idxBits)
-    val candidate_repl_way = (if (boomParams.nL1HTLBWays > 1)  l1_plru.way(r_idx) else 0.U)
+    val candidate_repl_way = (if (cfg.nWays > 1)  l1_plru.way(r_idx) else 0.U)
     val repl_way = 
-      if (boomParams.nL1HTLBWays > 1)
+      if (cfg.nWays > 1)
             Mux(
               entries(r_idx).map(_.valid).asUInt.andR,
               candidate_repl_way,
               OHToUInt(PriorityEncoderOH(~entries(r_idx).map(_.valid).asUInt)),
             )
           else 1.U(1.W)
-    // printf("[HTLB] Replacing way: %d, with tag: %d in set: %d\n", repl_way, r_tag, r_idx)
+    midas.targetutils.SynthesizePrintf(printf("[HTLB] Replacing way: %d, with tag: %d in set: %d\n", repl_way, r_tag, r_idx))
     val victim_line = entries(r_idx)(repl_way)
-    // printf("[HTLB] Replacing Entry: Valid: %d, Tag: %d, Addr: %x, Phys: %d\n", e.valid, e.tag, e.getData().addr, e.getData().phys)
+    midas.targetutils.SynthesizePrintf(printf("[HTLB] Replacing Entry: Valid: %d, Tag: %d, Addr: %x, Phys: %d\n", victim_line.valid, victim_line.tag, victim_line.getData().addr, victim_line.getData().phys))
     // make a copy of the victim entry, and set the victim flag to notify the L2 HTLB
-    have_victim := true.B
+    // have_victim := true.B
 
-    victim_entry.addr := victim_line.data.asTypeOf(new HTLBEntryData).addr
-    victim_entry.phys := victim_line.data.asTypeOf(new HTLBEntryData).phys
-    victim_entry.try_phys := victim_line.data.asTypeOf(new HTLBEntryData).try_phys
-    victim_entry.ae := victim_line.data.asTypeOf(new HTLBEntryData).ae
-    victim_entry.hid := Cat(victim_line.tag, r_idx)
+    // victim_entry.addr := victim_line.data.asTypeOf(new HTLBEntryData).addr
+    // victim_entry.phys := victim_line.data.asTypeOf(new HTLBEntryData).phys
+    // victim_entry.try_phys := victim_line.data.asTypeOf(new HTLBEntryData).try_phys
+    // victim_entry.ae := victim_line.data.asTypeOf(new HTLBEntryData).ae
+    // victim_entry.hid := Cat(victim_line.tag, r_idx)
 
     victim_line.insert(r_tag, newEntry)
   }
@@ -344,7 +344,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   val set_idx = RegInit(0.U((log2Ceil(cfg.nSets) + 1).W))
   val way_idx = RegInit(0.U((log2Ceil(cfg.nWays) + 1).W))
-  val dumped_entry_idx = RegInit(0.U((log2Ceil(boomParams.nL1HTLBEntries) + 1).W))
+  val dumped_entry_idx = RegInit(0.U((log2Ceil(cfg.nSets * cfg.nWays) + 1).W))
   
   val hid_to_dump = RegInit(0.U(handleBits.W))
   val hit = WireDefault(false.B)
@@ -354,7 +354,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val set_idx_update = way_idx === cfg.nWays.U && state === s_dump
   // printf("way_idx_update: %d, set_idx_update: %d\n", way_idx_update, set_idx_update)
 
-  val way_clear = set_idx_update || (state === s_dump_req && way_idx === boomParams.nL1HTLBWays.U) || (state === s_dump && next_state === s_ready)
+  val way_clear = set_idx_update || (state === s_dump_req && way_idx === cfg.nWays.U) || (state === s_dump && next_state === s_ready)
   val set_clear = (state === s_dump && next_state === s_ready)
   // printf("way_clear: %d, set_clear: %d\n", way_clear, set_clear)
 
@@ -382,7 +382,7 @@ class HTLB(cfg: TLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   way_idx := Mux(way_clear, 0.U, Mux(way_idx_update, way_idx + 1.U, way_idx))
   set_idx := Mux(set_idx_update, set_idx + 1.U, 
-                     Mux(state === s_dump_req && way_idx === boomParams.nL1HTLBWays.U, hid_to_dump(idxBits-1,0) + 1.U, 
+                     Mux(state === s_dump_req && way_idx === cfg.nWays.U, hid_to_dump(idxBits-1,0) + 1.U, 
                          Mux(set_clear, 0.U, set_idx)))
   // printf("set_idx: %d, way_idx: %d\n", set_idx, way_idx)
 

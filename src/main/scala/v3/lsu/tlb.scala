@@ -173,6 +173,9 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   val hitsVec = widthMap(w => VecInit(all_entries.map(vm_enabled(w) && _.hit(vpn(w)))))
   val real_hits = widthMap(w => hitsVec(w).asUInt)
   val hits = widthMap(w => Cat(!vm_enabled(w), real_hits(w)))
+  when (io.resp(0).miss && io.req(0).bits.passthrough) {
+    midas.targetutils.SynthesizePrintf(printf("hits: %b, vpn: %x, vm_enabled: %b\n", hits(0).asUInt, vpn(0), vm_enabled(0)))
+  }
   val ppn = widthMap(w => Mux1H(hitsVec(w) :+ !vm_enabled(w), all_entries.map(_.ppn(vpn(w))) :+ vpn(w)(ppnBits-1, 0)))
 
     // permission bit arrays
@@ -310,6 +313,27 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
     io.resp(w).must_alloc   := (must_alloc_array(w) & hits(w)).orR
     io.resp(w).prefetchable := (prefetchable_array(w) & hits(w)).orR && edge.manager.managers.forall(m => !m.supportsAcquireB || m.supportsHint).B
     io.resp(w).miss  := do_refill || tlb_miss(w) || multipleHits(w)
+    when (io.resp(w).miss && io.req(w).bits.passthrough) {
+      midas.targetutils.SynthesizePrintf("[T miss: %d, %d, %d\n", do_refill, tlb_miss(w), multipleHits(w))
+      when (io.resp(w).ma.ld) {
+        midas.targetutils.SynthesizePrintf("  ma_ld: %d, %d\n", ma_ld_array(w), hits(w))
+      }
+      when (io.resp(w).ma.st) {
+        midas.targetutils.SynthesizePrintf("  ma_st: %d, %d\n", ma_st_array(w), hits(w))
+      }
+      when (io.resp(w).ae.ld) {
+        midas.targetutils.SynthesizePrintf("  ae_ld: %d, %d, %d\n", ae_valid_array(w), ae_ld_array(w), hits(w))
+      }
+      when (io.resp(w).ae.st) {
+        midas.targetutils.SynthesizePrintf("  ae_st: %d, %d, %d\n", ae_valid_array(w), ae_st_array(w), hits(w))
+      }
+      when (io.resp(w).ae.inst) {
+        midas.targetutils.SynthesizePrintf("  ae_inst: %b, %b, %b\n", ae_valid_array(w), ~px_array(w), hits(w))
+      }
+      when (io.resp(w).pf.ld || io.resp(w).pf.st ||io.resp(w).pf.inst) {
+        midas.targetutils.SynthesizePrintf("  pf: %d, %d, %d\n", io.resp(w).pf.ld, io.resp(w).pf.st, io.resp(w).pf.inst)
+      }
+    }
     io.resp(w).paddr := Cat(ppn(w), io.req(w).bits.vaddr(pgIdxBits-1, 0))
     io.resp(w).size := io.req(w).bits.size
     io.resp(w).cmd := io.req(w).bits.cmd

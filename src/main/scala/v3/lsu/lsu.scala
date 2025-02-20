@@ -265,7 +265,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.perf.acquire := io.dmem.perf.acquire
   io.core.perf.release := io.dmem.perf.release
 
-  val htlb = Module(new HTLB(rocket.TLBConfig(boomParams.nL1HTLBEntries/boomParams.nL1HTLBWays, boomParams.nL1HTLBWays)))
+  val htlb = Module(new HTLB(HTLBConfig(boomParams.nL1HTLBSets, boomParams.nL1HTLBWays)))
   io.htw <> htlb.io.htw
   io.htlb_mem <> htlb.io.mem
   htlb.io.htDump <> io.core.htDump
@@ -751,7 +751,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   // val ae_htw_addrs = widthMap(w => exe_htlb_vaddr(w) & ~((1.U << (xLen - 1))))
   for (w <- 0 until memWidth) {
     when (htlb.io.resp(w).ae) {
-      assert (!ENABLE_PHT.B, "How did we get an AE with PHT enabled?")
+      // assert (ENABLE_PHT.B === false.B, "How did we get an AE with PHT enabled?")
       // midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] AE on haddr %x -> vaddr %x\n", exe_htlb_vaddr(w), ae_htw_addrs(w)))
       midas.targetutils.SynthesizePrintf(printf("He%x,%x\n", exe_htlb_vaddr(w), ae_htw_addrs(w)))
     }
@@ -793,7 +793,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
     when (dtlb.io.req(w).valid) {
       when (htlb_enabled) {
-        midas.targetutils.SynthesizePrintf(printf("t%x,%d\n", dtlb.io.req(w).bits.vaddr, dtlb.io.req(w).bits.htlb_passthrough))
+        midas.targetutils.SynthesizePrintf(printf("t%x,%d,%d\n", dtlb.io.req(w).bits.vaddr, dtlb.io.req(w).bits.htlb_passthrough, dtlb.io.req(w).bits.passthrough))
       }
     }
   }
@@ -853,8 +853,20 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     xcpt_found = xcpt_found || mem_xcpt_valids(w)
     oldest_xcpt_rob_idx = Mux(is_older, mem_xcpt_uops(w).rob_idx, oldest_xcpt_rob_idx)
   }
+  val was_htlb = RegInit(false.B)
+  when (htlb_enabled && !was_htlb) {
+    was_htlb := htlb_enabled
+  }
+  when (mem_xcpt_valid && was_htlb) {
+    midas.targetutils.SynthesizePrintf(printf("xcpt cause: %x, vaddr: %x\n", mem_xcpt_cause, mem_xcpt_vaddr))
+  }
   val exe_tlb_miss  = widthMap(w => exe_tlb_valid(w) && (dtlb.io.resp(w).miss || exe_htlb_miss(w) || !dtlb.io.req(w).ready))
+  // val exe_tlb_miss  = widthMap(w => exe_tlb_valid(w) && (dtlb.io.resp(w).miss || exe_htlb_miss(w) || !dtlb.io.req(w).ready) && !dtlb.io.req(w).bits.htlb_passthrough)
+  when (exe_tlb_miss(0) && was_htlb) {
+    midas.targetutils.SynthesizePrintf(printf("miss: %d, %d, %d, %d, %d\n", dtlb.io.req(0).valid, dtlb.io.resp(0).miss, exe_htlb_miss(0), !dtlb.io.req(0).ready, !dtlb.io.req(0).bits.htlb_passthrough))
+  }
   val exe_tlb_paddr = widthMap(w => Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits), exe_tlb_vaddr(w)(corePgIdxBits-1,0)))
+  // val exe_tlb_paddr = widthMap(w => Mux(!dtlb.io.req(w).bits.htlb_passthrough, Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits), exe_tlb_vaddr(w)(corePgIdxBits-1,0)), exe_tlb_vaddr(w)(paddrBits-1,0)))
   val exe_tlb_uncacheable = widthMap(w => !(dtlb.io.resp(w).cacheable))
 
   val small_handle_criterium = widthMap(w => !exe_htlb_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).try_phys)
@@ -862,8 +874,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   for (w <- 0 until memWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr || exe_req(w).bits.sfence.valid, "[lsu] paddrs should match.")
 
-    when(!dtlb.io.resp(w).miss && htlb_enabled && dtlb.io.req(w).bits.vaddr =/= 0.U) {
-      midas.targetutils.SynthesizePrintf(printf("T%x,%x\n", dtlb.io.req(w).bits.vaddr, dtlb.io.resp(w).paddr))
+    when(!exe_tlb_miss(w) && htlb_enabled && exe_tlb_vaddr(w) =/= 0.U) {
+      midas.targetutils.SynthesizePrintf(printf("T%x,%x\n", exe_tlb_vaddr(w), exe_tlb_paddr(w)))
     }
 
     // debug for printing paddr for small handle optimization
@@ -972,7 +984,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     } .elsewhen (will_fire_hella_incoming(w)) {
       assert(hella_state === h_s1)
 
-      dmem_req(w).valid               := !io.hellacache.s1_kill && (!exe_tlb_miss(w) || hella_req.phys)
+      dmem_req(w).valid               := !io.hellacache.s1_kill && (!exe_tlb_miss(w)) //  || hella_req.phys)
       dmem_req(w).bits.addr           := exe_tlb_paddr(w)
       dmem_req(w).bits.data           := (new freechips.rocketchip.rocket.StoreGen(
         hella_req.size, 0.U,
@@ -1099,7 +1111,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
 
   val mem_tlb_miss             = if (ENABLE_PHT > 0) {
-    widthMap(exe_tlb_miss)
+    widthMap(w => RegNext(exe_tlb_miss(w)))
   } else {
     widthMap(w => RegNext(exe_tlb_miss(w)) && !fired_hella_incoming(w))
   }
@@ -1177,7 +1189,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     io.core.clr_bsy(w).valid := clr_bsy_valid(w) &&
                                !IsKilledByBranch(io.core.brupdate, clr_bsy_brmask(w)) &&
                                !io.core.exception && !RegNext(io.core.exception) && !RegNext(RegNext(io.core.exception))
-    when (htlb_enabled) {
+    when (htlb_enabled && false.B) {
       midas.targetutils.SynthesizePrintf(printf("clr_bsy(%d): %x, valid: %d, killed: %d\n", w.U, io.core.clr_bsy(w).bits, io.core.clr_bsy(w).valid, IsKilledByBranch(io.core.brupdate, clr_bsy_brmask(w))))
     }
     io.core.clr_bsy(w).bits  := clr_bsy_rob_idx(w)
@@ -1663,7 +1675,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   {
     val commit_store = io.core.commit.valids(w) && io.core.commit.uops(w).uses_stq
     val commit_load  = io.core.commit.valids(w) && io.core.commit.uops(w).uses_ldq
-    when (htlb_enabled) {
+    when (htlb_enabled && false.B) {
       midas.targetutils.SynthesizePrintf(printf("cs%d,%d\n", commit_store, commit_load))
     }
     val idx = Mux(commit_store, temp_stq_commit_head, temp_ldq_head)
@@ -1773,6 +1785,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   } .elsewhen (hella_state === h_s2) {
     io.hellacache.s2_xcpt := hella_xcpt
     when (io.hellacache.s2_kill || hella_xcpt.asUInt =/= 0.U) {
+      when (htlb_enabled && RegNext(exe_tlb_miss(0) && dtlb.io.req(0).bits.passthrough)) {
+        midas.targetutils.SynthesizePrintf(printf("real exp was thrown from dcache: %d\n", hella_xcpt.asUInt))
+      }
       hella_state := h_dead
     } .otherwise {
       hella_state := h_wait

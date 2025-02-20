@@ -106,9 +106,9 @@ case class BoomCoreParams(
   enableHandleSupport: Int = 0,
   enablePHTSupport: Int = 0,
   nL1HTLBWays: Int = 4,
-  nL1HTLBEntries: Int = 8,
+  nL1HTLBSets: Int = 4,
   nL2HTLBWays: Int = 8,
-  nL2HTLBEntries: Int = 512
+  nL2HTLBSets: Int = 64
 // DOC include end: BOOM Parameters
 ) extends freechips.rocketchip.tile.CoreParams
 {

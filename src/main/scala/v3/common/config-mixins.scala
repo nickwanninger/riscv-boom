@@ -180,7 +180,7 @@ class WithNSmallYukons(n: Int = 1) extends Config(
               nPerfCounters = 4,
               fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
               nL2HTLBWays = 8,
-              nL2HTLBEntries = 512,
+              nL2HTLBSets = 64,
             ),
             dcache = Some(
               DCacheParams(rowBits = 64, nSets=64, nWays=4, nMSHRs=2, nTLBWays=8)
@@ -228,9 +228,9 @@ class WithNMediumYukons(n: Int = 1) extends Config(
               nL2TLBWays=16,
               nL2TLBEntries=2048,
               nL1HTLBWays = 4,
-              nL1HTLBEntries = 64,
+              nL1HTLBSets = 8,
               nL2HTLBWays = 8,
-              nL2HTLBEntries = 512,
+              nL2HTLBSets = 512,
             ),
             dcache = Some(
               DCacheParams(rowBits = 64, nSets=64, nWays=4, nMSHRs=2, nTLBWays=6, nTLBSets = 16)
@@ -272,18 +272,17 @@ class WithNLargeYukons(n: Int = 1) extends Config(
               numStqEntries = 24,
               maxBrCount = 16,
               numFetchBufferEntries = 24,
-              // enablePrefetching = true,
               ftq = FtqParameters(nEntries=32),
               fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
-              nL2TLBWays=16,
-              nL2TLBEntries=2048,
-              nL1HTLBWays = 4,
-              nL1HTLBEntries = 64,
+              // nL2TLBWays=16,
+              // nL2TLBEntries=2048,
+              nL1HTLBWays = 8,
+              nL1HTLBSets = 8,
               nL2HTLBWays = 8,
-              nL2HTLBEntries = 512,
+              nL2HTLBSets = 64,
             ),
             dcache = Some(
-              DCacheParams(rowBits = 128, nSets=64, nWays=8, nMSHRs=8, nTLBWays=6, nTLBSets = 16)
+              DCacheParams(rowBits = 128, nSets=64, nWays=8, nMSHRs=4, nTLBWays=16)
             ),
             icache = Some(
               ICacheParams(rowBits = 128, nSets=64, nWays=8, fetchBytes=4*4)
@@ -373,16 +372,10 @@ class WithNLargeBooms(n: Int = 1) extends Config(
               maxBrCount = 16,
               numFetchBufferEntries = 24,
               ftq = FtqParameters(nEntries=32),
-              fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
-              nL2TLBWays=16,
-              nL2TLBEntries=2048,
-              nL1HTLBWays = 4,
-              nL1HTLBEntries = 64,
-              nL2HTLBWays = 8,
-              nL2HTLBEntries = 512,
+              fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true))
             ),
             dcache = Some(
-              DCacheParams(rowBits = 128, nSets=64, nWays=8, nMSHRs=8, nTLBWays=6, nTLBSets = 16)
+              DCacheParams(rowBits = 128, nSets=64, nWays=8, nMSHRs=4, nTLBWays=16)
             ),
             icache = Some(
               ICacheParams(rowBits = 128, nSets=64, nWays=8, fetchBytes=4*4)
