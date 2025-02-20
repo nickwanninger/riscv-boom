@@ -316,13 +316,13 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val victim_line = entries(r_idx)(repl_way)
     midas.targetutils.SynthesizePrintf(printf("[HTLB] Replacing Entry: Valid: %d, Tag: %d, Addr: %x, Phys: %d\n", victim_line.valid, victim_line.tag, victim_line.getData().addr, victim_line.getData().phys))
     // make a copy of the victim entry, and set the victim flag to notify the L2 HTLB
-    // have_victim := true.B
+    have_victim := true.B
 
-    // victim_entry.addr := victim_line.data.asTypeOf(new HTLBEntryData).addr
-    // victim_entry.phys := victim_line.data.asTypeOf(new HTLBEntryData).phys
-    // victim_entry.try_phys := victim_line.data.asTypeOf(new HTLBEntryData).try_phys
-    // victim_entry.ae := victim_line.data.asTypeOf(new HTLBEntryData).ae
-    // victim_entry.hid := Cat(victim_line.tag, r_idx)
+    victim_entry.addr := victim_line.data.asTypeOf(new HTLBEntryData).addr
+    victim_entry.phys := victim_line.data.asTypeOf(new HTLBEntryData).phys
+    victim_entry.try_phys := victim_line.data.asTypeOf(new HTLBEntryData).try_phys
+    victim_entry.ae := victim_line.data.asTypeOf(new HTLBEntryData).ae
+    victim_entry.hid := Cat(victim_line.tag, r_idx)
 
     victim_line.insert(r_tag, newEntry)
   }
