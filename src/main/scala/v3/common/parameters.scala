@@ -108,7 +108,8 @@ case class BoomCoreParams(
   nL1HTLBWays: Int = 4,
   nL1HTLBSets: Int = 4,
   nL2HTLBWays: Int = 8,
-  nL2HTLBSets: Int = 64
+  nL2HTLBSets: Int = 64,
+  enableTwoStageHTW: Boolean = false
 // DOC include end: BOOM Parameters
 ) extends freechips.rocketchip.tile.CoreParams
 {

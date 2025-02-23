@@ -75,7 +75,13 @@ class DatapathHTWIO(implicit p: Parameters) extends BoomBundle()(p) {
   val clear_htlb = Input(Bool())
 }
 
-class HTW(two_stage_htw: Boolean = false)(implicit p: Parameters) extends BoomModule()(p) {
+class TopLevelCacheEntry(implicit p: Parameters) extends BoomBundle()(p) {
+  val valid = Bool()
+  val tag = UInt((handleBits - 18).W)  // Since ind1 is 18 bits
+  val data = UInt(maxSVAddrBits.W)     // Store the base address for inner walks
+}
+
+class HTW(implicit p: Parameters) extends BoomModule()(p) {
   require(maxSVAddrBits == 39)
   require(new HTE().getWidth == 64)
   val io = IO(new Bundle {
@@ -86,6 +92,8 @@ class HTW(two_stage_htw: Boolean = false)(implicit p: Parameters) extends BoomMo
   })
   io.dpath.customCSRs := DontCare
   io.dpath.perf.l1miss := io.requestor.l1miss
+
+  val two_stage_htw = boomParams.enableTwoStageHTW
 
   // State Machine
   val s_ready :: s_req :: s_wait1 :: s_wait2 :: s_wait3 :: s_req2 :: s_wait4 :: s_wait5 :: s_wait6 :: s_victim1 :: s_victim2 :: s_victim3 :: s_dump :: s_dump_req :: s_dump_wait :: s_invalidating :: s_invalidated :: s_htw_replay_pending :: s_dump_replay_pending :: Nil = Enum(19)
@@ -150,6 +158,40 @@ class HTW(two_stage_htw: Boolean = false)(implicit p: Parameters) extends BoomMo
     val way_idx = RegInit(0.U((log2Ceil(boomParams.nL2HTLBWays) + 1).W))
     
     val hid = io.requestor.req.bits.bits.hid
+
+    val entries_per_ht_bits = 18  // log2(4096 * 512 / 8) = log2(262144)
+
+    def getIndex(hid: UInt) = (hid >> entries_per_ht_bits)(3, 0)    // Bottom 4 bits of ind0 for 16 entries
+    def getTag(hid: UInt) = (hid >> entries_per_ht_bits)(handleBits-19, 4)  // Remaining bits of ind0
+    def getInnerIndex(hid: UInt) = hid(entries_per_ht_bits-1, 0)  // Bottom 18 bits
+
+    val top_level_cache = if (two_stage_htw) {
+      val cache = RegInit(VecInit(Seq.fill(16)(0.U.asTypeOf(new TopLevelCacheEntry))))
+
+      val cache_lookup_idx = getIndex(hid)
+      val cache_lookup_tag = getTag(hid)
+      val inner_index = getInnerIndex(hid)
+      val cache_entry = cache(cache_lookup_idx)
+      val cache_hit = cache_entry.valid && cache_entry.tag === cache_lookup_tag
+
+      when (state === s_wait3 && mem_resp_valid) {
+        val fill_idx = getIndex(hid)
+        cache(fill_idx).valid := true.B
+        cache(fill_idx).tag := getTag(hid)
+        cache(fill_idx).data := mem_resp_data
+
+        midas.targetutils.SynthesizePrintf(printf(
+          "[HTW] Cache fill: ind0=%d (idx=%d tag=%x) ind1=%d data=%x\n",
+          hid >> entries_per_ht_bits, fill_idx, getTag(hid), inner_index, mem_resp_data
+        ))
+      }
+
+      when (io.dpath.clear_htlb) {
+        cache.foreach(_.valid := false.B)
+      }
+
+      Some((cache, inner_index))
+    } else None
 
     val (l2_hit, l2_error, l2_hte, l2_htlb_ram) = {
       val code = new ParityCode
@@ -513,17 +555,27 @@ class HTW(two_stage_htw: Boolean = false)(implicit p: Parameters) extends BoomMo
         }
       }
       is(s_req) {
-        next_state := Mux(io.mem.req.fire, s_wait1, s_req)
-        midas.targetutils.SynthesizePrintf(printf(
-          "[H2l%d,%x\n",
-          (io.mem.req.bits.addr - htBase)/8.U((xLen - 1).W),
-          io.mem.req.bits.addr
-        ))
-        // midas.targetutils.SynthesizePrintf(printf(
-        //   "[HTW] -> [Mem] Looking up HID: %d at %x\n",
-        //   (io.mem.req.bits.addr - htBase)/8.U(xLen.W),
-        //   io.mem.req.bits.addr
-        // ))
+        if (two_stage_htw) {
+          val (cache, _) = top_level_cache.get
+          val cache_hit = cache(getIndex(hid)).valid && 
+                         cache(getIndex(hid)).tag === getTag(hid)
+          
+          midas.targetutils.SynthesizePrintf(printf(
+            "[H2W1%d,%x,%x,%x\n",
+            cache_hit,
+            getIndex(hid),
+            getTag(hid),
+            io.mem.req.bits.addr
+          ))
+          
+          when (cache_hit) {
+            next_state := s_req2
+          }.otherwise {
+            next_state := Mux(io.mem.req.fire, s_wait1, s_req)
+          }
+        } else {
+          next_state := Mux(io.mem.req.fire, s_wait1, s_req)
+        }
       }
       is(s_wait1) {
         next_state := Mux(l2_hit, s_req, s_wait2)
@@ -534,6 +586,14 @@ class HTW(two_stage_htw: Boolean = false)(implicit p: Parameters) extends BoomMo
       is (s_wait3) {
         if (two_stage_htw) {
           next_state := Mux(mem_resp_valid, s_req2, Mux(io.mem.s2_nack, s_req, s_wait3))
+          when (mem_resp_valid) {
+            midas.targetutils.SynthesizePrintf(printf(
+              "[H2W2%x,%x,%x\n",
+              pte.addr,
+              inner_walk_base,
+              hid(entries_per_ht_bits-1, 0)
+            ))
+          }
           inner_walk_base := pte.addr
         } else {
           next_state := Mux(mem_resp_valid, s_ready, Mux(io.mem.s2_nack, s_req, s_wait3))
@@ -551,7 +611,12 @@ class HTW(two_stage_htw: Boolean = false)(implicit p: Parameters) extends BoomMo
       }
       is (s_req2) {
         next_state := Mux(io.mem.req.fire, s_wait4, s_req2)
-        midas.targetutils.SynthesizePrintf(printf("[H2r2\n"))
+        midas.targetutils.SynthesizePrintf(printf(
+          "[H2W3%x,%x,%x\n",
+          io.mem.req.bits.addr,
+          inner_walk_base,
+          hid(entries_per_ht_bits-1, 0)
+        ))
       }
       is (s_wait4) {
         next_state := s_wait5 // TODO: this will change once I get a cache for the top level walks
@@ -560,6 +625,7 @@ class HTW(two_stage_htw: Boolean = false)(implicit p: Parameters) extends BoomMo
         next_state := Mux(io.mem.s2_nack, s_req2, Mux(io.mem.s2_xcpt.asUInt =/= 0.U, s_req2, s_wait6))
       }
       is (s_wait6) {
+        next_state := Mux(mem_resp_valid, s_ready, Mux(io.mem.s2_nack, s_req2, s_wait6))
         resp_valid := mem_resp_valid
         when (mem_resp_valid) {
           midas.targetutils.SynthesizePrintf(printf(
@@ -638,26 +704,28 @@ class HTW(two_stage_htw: Boolean = false)(implicit p: Parameters) extends BoomMo
     }
 
     // HT Lookup
-    val hte_vaddr = htBase + hid * ((new HTE().getWidth.U) / 8.U((log2Ceil(new HTE().getWidth) + 1).W))
-
-    val top_level_walk_offset = hid(26, 9)
-    val top_level_walk_addr = htBase + top_level_walk_offset * 8.U
-
-    val walk_offset = hid(8, 0)
-    val inner_walk_addr = inner_walk_base + walk_offset * 8.U
-
-    val walk_addr = Mux(state === s_req, top_level_walk_addr, inner_walk_addr)
+    val walk_addr = if (two_stage_htw) {
+      val (cache, _) = top_level_cache.get
+      val cache_entry = cache(getIndex(hid))
+      val cache_hit = cache_entry.valid && cache_entry.tag === getTag(hid)
+      
+      Mux(state === s_req,
+          htBase + (hid >> entries_per_ht_bits) * 8.U,  // First level walk
+          cache_entry.data + (hid(entries_per_ht_bits-1, 0)) * 8.U)  // Second level walk using bottom bits of hid
+    } else {
+      htBase + hid * ((new HTE().getWidth.U) / 8.U((log2Ceil(new HTE().getWidth) + 1).W))
+    }
 
     // Prepare Memory Request
     io.mem.keep_clock_enabled := false.B
 
-    io.mem.req.valid := state === s_req  || state === s_dump_req
+    io.mem.req.valid := state === s_req  || state === s_dump_req || state === s_req2
     io.mem.req.bits.phys := io.requestor.pht_enabled
     io.mem.req.bits.cmd := Mux(state === s_dump_req, M_XWR, M_XRD)
     io.mem.req.bits.size := log2Ceil(xLen / 8).U
     io.mem.req.bits.signed := false.B
-    io.mem.req.bits.addr := Mux(state === s_dump_req, hte_dst_addr, hte_vaddr)
-    io.mem.req.bits.idx.foreach(_ := Mux(state === s_dump_req, hte_dst_addr, hte_vaddr))
+    io.mem.req.bits.addr := Mux(state === s_dump_req, hte_dst_addr, walk_addr)
+    io.mem.req.bits.idx.foreach(_ := Mux(state === s_dump_req, hte_dst_addr, walk_addr))
     io.mem.req.bits.dprv := Mux(io.requestor.pht_enabled, PRV.S.U, PRV.U.U) // HTW accesses are U-mode by definition
     io.mem.req.bits.dv := false.B
     io.mem.req.bits.tag := DontCare
@@ -668,13 +736,33 @@ class HTW(two_stage_htw: Boolean = false)(implicit p: Parameters) extends BoomMo
     io.mem.req.bits.mask := DontCare
 
     // TODO: This may need to change if we get an exception in the middle of a handle table walk
-    io.mem.s1_kill := l2_hit || (state =/= s_wait1 && state =/= s_dump_wait)
+    io.mem.s1_kill := l2_hit || (state =/= s_wait1 && state =/= s_dump_wait && state =/= s_wait4)
     io.mem.s1_data.data := Mux(state === s_dump_wait, hid_to_dump, 0.U)
     io.mem.s1_data.mask := Mux(state === s_dump_wait, ((1 << coreDataBytes) - 1).U, 0.U)
     io.mem.s2_kill := false.B
 
     when (io.mem.s2_xcpt.asUInt =/= 0.U) {
       midas.targetutils.SynthesizePrintf(printf("[H2E%x\n", io.mem.s2_xcpt.asUInt))
+    }
+
+    // Add near memory request logic:
+    when (io.mem.req.valid) {
+      midas.targetutils.SynthesizePrintf(printf(
+        "[H2R%d,%x,%d,%d\n",
+        state,
+        walk_addr,
+        io.mem.req.bits.phys,
+        io.mem.s1_kill
+      ))
+    }
+
+    // Add near s1_kill logic:
+    when (io.mem.s1_kill && RegNext(io.mem.req.valid)) {
+      midas.targetutils.SynthesizePrintf(printf(
+        "[H2K%d,%d\n",
+        l2_hit,
+        state
+      ))
     }
   }
 

@@ -106,6 +106,14 @@ class WithBoomUserLevelHandleSupport extends Config((site, here, up) => {
   }
 })
 
+class WithTwoStageHTW extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
+      enableTwoStageHTW = true
+    )))
+  }
+})
+
 /**
  * 1-wide BOOM.
  */
@@ -276,8 +284,8 @@ class WithNLargeYukons(n: Int = 1) extends Config(
               fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
               // nL2TLBWays=16,
               // nL2TLBEntries=2048,
-              nL1HTLBWays = 8,
-              nL1HTLBSets = 8,
+              nL1HTLBWays = 4,
+              nL1HTLBSets = 16,
               nL2HTLBWays = 8,
               nL2HTLBSets = 64,
             ),
