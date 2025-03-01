@@ -293,6 +293,8 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   // a miss on duplicate entries.
   val multipleHits = widthMap(w => PopCountAtLeast(real_hits(w), 2))
 
+  midas.targetutils.PerfCounter(do_refill && io.req(0).bits.passthrough, "l1_tlb_unnecessary_miss", "L1 TLB Unnecessary Miss")
+
   io.miss_rdy := state === s_ready
   for (w <- 0 until memWidth) {
     when (!io.resp(w).miss && io.req(w).fire) {
