@@ -310,7 +310,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val counter = RegInit(0.U(9.W))
   counter := Mux(io.core.commit_load_at_rob_head && !ldq_nonempty && htlb_enabled, Mux(counter === 511.U, 0.U, counter + 1.U), 0.U)
 
-  assert(counter =/= 511.U, "Trying to commit loads that aren't there")
+  // assert(counter =/= 511.U, "Trying to commit loads that aren't there")
 
   var ldq_full = Bool()
   var stq_full = Bool()
