@@ -213,7 +213,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val cross_pages = WireDefault(false.B)
 
     io.req(w).ready := true.B
-    io.resp(w).miss := do_refill || htlb_miss(w) || (htlb_hit(w) && cross_pages && phys(w))
+    io.resp(w).miss := (do_refill && !io.req(w).bits.passthrough) || htlb_miss(w) || (htlb_hit(w) && cross_pages && phys(w))
     io.resp(w).addr := Mux(!hm_enabled(w), effective_address,
                           Mux (!io.resp(w).miss, 
                               //  io.req(w).bits.haddr(xLen - 2, 0), 0.U))
@@ -226,6 +226,8 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       midas.targetutils.SynthesizePrintf(printf("[Haei\n"))
       entries(hid_set(w))(OHToUInt(real_hits(w))).invalidate()
     }
+
+    midas.targetutils.PerfCounter(do_refill && io.req(0).bits.passthrough, "l1_htlb_unnecessary_miss", "L1 HTLB Unnecessary Miss")
 
     // you will try phys or have phys, check if you cross pages
     when (hm_enabled(w) && (htlb_hit(w) && (try_phys(w) || phys(w)))) {

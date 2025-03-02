@@ -557,7 +557,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   
   // can't fire anything? debug print all cases
-  when (htlb_enabled) {
+  when (htlb_enabled && false.B) {
     when (!(can_fire_load_incoming.reduce(_||_) || can_fire_stad_incoming.reduce(_||_) || can_fire_sta_incoming.reduce(_||_) ||
             can_fire_std_incoming.reduce(_||_) || can_fire_sfence.reduce(_||_) || can_fire_release.reduce(_||_) ||
             can_fire_load_retry.reduce(_||_) || can_fire_sta_retry.reduce(_||_) || can_fire_store_commit.reduce(_||_) ||

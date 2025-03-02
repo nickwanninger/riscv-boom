@@ -285,7 +285,7 @@ class WithNLargeYukons(n: Int = 1) extends Config(
               // nL2TLBWays=16,
               // nL2TLBEntries=2048,
               nL1HTLBWays = 4,
-              nL1HTLBSets = 16,
+              nL1HTLBSets = 4,
               nL2HTLBWays = 8,
               nL2HTLBSets = 64,
             ),
