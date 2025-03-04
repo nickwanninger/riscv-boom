@@ -157,38 +157,38 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val entries_per_ht_bits = 18  // log2(4096 * 512 / 8) = log2(262144)
     val inner_walk_base = RegInit(0.U(xLen.W))
 
-    // val top_level_cache_size = 16
-    // def getIndex(hid: UInt) = (hid >> entries_per_ht_bits)(log2Ceil(top_level_cache_size)-1, 0)    // Bottom 4 bits of ind0 for 16 entries
-    // def getTag(hid: UInt) = (hid >> entries_per_ht_bits)(handleBits-19, 4) // log2Ceil(top_level_cache_size))  // Remaining bits of ind0
-    // def getInnerIndex(hid: UInt) = hid(entries_per_ht_bits-1, 0)  // Bottom 18 bits
+    val top_level_cache_size = 4
+    def getIndex(hid: UInt) = (hid >> entries_per_ht_bits)(log2Ceil(top_level_cache_size)-1, 0)    // Bottom 4 bits of ind0 for 16 entries
+    def getTag(hid: UInt) = (hid >> entries_per_ht_bits)(handleBits-19, log2Ceil(top_level_cache_size)) // log2Ceil(top_level_cache_size))  // Remaining bits of ind0
+    def getInnerIndex(hid: UInt) = hid(entries_per_ht_bits-1, 0)  // Bottom 18 bits
 
-    // val top_level_cache = if (boomParams.enableTwoStageHTW && false) {
-    //   val cache = RegInit(VecInit(Seq.fill(16)(0.U.asTypeOf(new TopLevelCacheEntry))))
+    val top_level_cache = if (boomParams.enableTwoStageHTW) {
+      val cache = RegInit(VecInit(Seq.fill(16)(0.U.asTypeOf(new TopLevelCacheEntry))))
 
-    //   val cache_lookup_idx = getIndex(hid)
-    //   val cache_lookup_tag = getTag(hid)
-    //   val inner_index = getInnerIndex(hid)
-    //   val cache_entry = cache(cache_lookup_idx)
-    //   val cache_hit = cache_entry.valid && cache_entry.tag === cache_lookup_tag
+      val cache_lookup_idx = getIndex(hid)
+      val cache_lookup_tag = getTag(hid)
+      val inner_index = getInnerIndex(hid)
+      val cache_entry = cache(cache_lookup_idx)
+      val cache_hit = cache_entry.valid && cache_entry.tag === cache_lookup_tag
 
-    //   when (state === s_wait3 && mem_resp_valid) {
-    //     val fill_idx = getIndex(hid)
-    //     cache(fill_idx).valid := true.B
-    //     cache(fill_idx).tag := getTag(hid)
-    //     cache(fill_idx).data := mem_resp_data
+      when (state === s_wait3 && mem_resp_valid) {
+        val fill_idx = getIndex(hid)
+        cache(fill_idx).valid := true.B
+        cache(fill_idx).tag := getTag(hid)
+        cache(fill_idx).data := mem_resp_data
 
-    //     midas.targetutils.SynthesizePrintf(printf(
-    //       "[HTW] Cache fill: ind0=%d (idx=%d tag=%x) ind1=%d data=%x\n",
-    //       hid >> entries_per_ht_bits, fill_idx, getTag(hid), inner_index, mem_resp_data
-    //     ))
-    //   }
+        midas.targetutils.SynthesizePrintf(printf(
+          "[HTW] Cache fill: ind0=%d (idx=%d tag=%x) ind1=%d data=%x\n",
+          hid >> entries_per_ht_bits, fill_idx, getTag(hid), inner_index, mem_resp_data
+        ))
+      }
 
-    //   when (io.dpath.clear_htlb) {
-    //     cache.foreach(_.valid := false.B)
-    //   }
+      when (io.dpath.clear_htlb) {
+        cache.foreach(_.valid := false.B)
+      }
 
-    //   Some((cache, inner_index))
-    // } else None
+      Some((cache, inner_index))
+    } else None
 
     val (l2_hit, l2_error, l2_hte, l2_htlb_ram) = {
       val code = new ParityCode
@@ -548,24 +548,24 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         victim_hte := Mux(io.requestor.evict.valid, io.requestor.evict.bits, victim_hte)
       }
       is(s_req) {
-        if (boomParams.enableTwoStageHTW && false) {
-          // val (cache, _) = top_level_cache.get
-          // val cache_hit = cache(getIndex(hid)).valid && 
-          //                cache(getIndex(hid)).tag === getTag(hid)
+        if (boomParams.enableTwoStageHTW) {
+          val (cache, _) = top_level_cache.get
+          val cache_hit = cache(getIndex(hid)).valid && 
+                         cache(getIndex(hid)).tag === getTag(hid)
           
-          // midas.targetutils.SynthesizePrintf(printf(
-          //   "[H2W1%d,%x,%x,%x\n",
-          //   cache_hit,
-          //   getIndex(hid),
-          //   getTag(hid),
-          //   io.mem.req.bits.addr
-          // ))
+          midas.targetutils.SynthesizePrintf(printf(
+            "[H2W1%d,%x,%x,%x\n",
+            cache_hit,
+            getIndex(hid),
+            getTag(hid),
+            io.mem.req.bits.addr
+          ))
           
-          // when (cache_hit) {
-          //   next_state := s_req2
-          // }.otherwise {
-          //   next_state := Mux(io.mem.req.fire, s_wait1, s_req)
-          // }
+          when (cache_hit) {
+            next_state := s_req2
+          }.otherwise {
+            next_state := Mux(io.mem.req.fire, s_wait1, s_req)
+          }
         } else {
           next_state := Mux(io.mem.req.fire, s_wait1, s_req)
         }
@@ -697,13 +697,14 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     // HT Lookup
     val walk_addr = if (boomParams.enableTwoStageHTW) {
-      // val (cache, _) = top_level_cache.get
-      // val cache_entry = cache(getIndex(hid))
-      // val cache_hit = cache_entry.valid && cache_entry.tag === getTag(hid)
+      val (cache, _) = top_level_cache.get
+      val cache_entry = cache(getIndex(hid))
+      val cache_hit = cache_entry.valid && cache_entry.tag === getTag(hid)
       
       Mux(state === s_req,
           htBase + (hid >> entries_per_ht_bits) * 8.U,  // First level walk
-          inner_walk_base + (hid(entries_per_ht_bits-1, 0)) * 8.U)  // Second level walk using bottom bits of hid
+          // inner_walk_base + hid(entries_per_ht_bits-1, 0) * 8.U)  // Second level walk using bottom bits of hid
+          cache_entry.data + hid(entries_per_ht_bits-1, 0) * 8.U)
     } else {
       htBase + hid * ((new HTE().getWidth.U) / 8.U((log2Ceil(new HTE().getWidth) + 1).W))
     }
