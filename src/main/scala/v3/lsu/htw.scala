@@ -94,7 +94,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
   io.dpath.perf.l1miss := io.requestor.l1miss
 
   // State Machine
-  val s_ready :: s_req :: s_wait1 :: s_wait2 :: s_wait3 :: s_req2 :: s_wait4 :: s_wait5 :: s_wait6 :: s_victim1 :: s_victim2 :: s_victim3 :: s_dump :: s_dump_req :: s_dump_wait :: s_invalidating :: s_invalidated :: s_htw_replay_pending :: s_dump_replay_pending :: Nil = Enum(19)
+  val s_ready :: s_req :: s_wait1 :: s_wait2 :: s_wait3 :: s_req2 :: s_wait4 :: s_wait5 :: s_wait6 :: s_victim1 :: s_victim2 :: s_victim3 :: s_dump :: s_dump_req :: s_dump_wait :: s_invalidating :: s_invalidated :: Nil = Enum(17)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   val l2_refill_wire = Wire(Bool())
@@ -295,6 +295,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
       
       val s0_valid = !l2_refill
+      // val s1_valid = RegNext(s0_valid && io.requestor.req.valid && state === s_wait1)
       val s1_valid = RegNext(s0_valid && io.requestor.req.valid)
       val s2_valid = RegNext(s1_valid)
 
@@ -659,18 +660,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         // midas.targetutils.SynthesizePrintf(printf("[H2Dd%x,%x,%d\n", hid_to_dump, hte_dst_addr, mem_resp_valid))
         next_state := Mux(mem_resp_valid, s_dump, Mux(io.mem.s2_nack, s_dump_req, s_dump_wait))
 
-        when (next_state === s_dump_replay_pending) {
-          // midas.targetutils.SynthesizePrintf(printf("[H2N%d,%d\n", dumped_entry_idx, hid_to_dump))
-        }. elsewhen(next_state === s_dump) {
+        when(next_state === s_dump) {
           // midas.targetutils.SynthesizePrintf(printf("[H2D%d,%d\n", dumped_entry_idx, hid_to_dump))
           dumped_entry_idx := dumped_entry_idx + 1.U
         }
-      }
-      is (s_htw_replay_pending) {
-        next_state := Mux(io.ptw_done, s_req, s_htw_replay_pending)
-      }
-      is (s_dump_replay_pending) {
-        next_state := Mux(io.ptw_done, s_dump_req, s_dump_replay_pending)
       }
     }
         
@@ -707,6 +700,16 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           cache_entry.data + hid(entries_per_ht_bits-1, 0) * 8.U)
     } else {
       htBase + hid * ((new HTE().getWidth.U) / 8.U((log2Ceil(new HTE().getWidth) + 1).W))
+    }
+
+    if (boomParams.enableTwoStageHTW) {
+      val (cache, _) = top_level_cache.get
+      val cache_entry = cache(getIndex(hid))
+      midas.targetutils.PerfCounter(
+        (!cache_entry.valid && cache_entry.tag === getTag(hid)) && state === s_req, 
+        "htw_cache_miss", 
+        "Handle Table Walk Cache Miss"
+      )
     }
 
     // Prepare Memory Request
@@ -757,23 +760,17 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     //     state
     //   ))
     // }
+    midas.targetutils.PerfCounter(
+      (state === s_req || state === s_req2),
+      "htw_req_latency", 
+      "Handle Table Walk Request Latency (cycles for both stages if two-stage walk)"
+    )
 
-    // /*
-    //  HTW total latency counter
-    // */
-    // val walk_active = RegInit(false.B)
-  
-    // when (state === s_req && next_state === s_wait1) {
-    //   walk_active := true.B
-    // } .elsewhen (walk_active && resp_valid) {
-    //   walk_active := false.B
-    // }
-
-    // midas.targetutils.PerfCounter(
-    //   resp_valid && walk_active, 
-    //   "htw_total_latency", 
-    //   "Handle Table Walk Total Latency (cycles for both stages if two-stage walk)"
-    // )
+    midas.targetutils.PerfCounter(
+      (state === s_wait1 || state === s_wait2 || state === s_wait3 || state === s_wait4 || state === s_wait5 || state === s_wait6),
+      "htw_total_latency", 
+      "Handle Table Walk Total Latency (cycles for both stages if two-stage walk)"
+    )
   }
 
   private def ccover(cond: Bool, label: String, desc: String)(implicit

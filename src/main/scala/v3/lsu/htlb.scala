@@ -115,7 +115,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val entries = Reg(Vec(cfg.nSets, Vec(cfg.nWays, new Entry(cfg.nSets))))
 
   // State Machine
-  val s_ready :: s_request :: s_wait :: s_victim_req :: s_victim_wait :: s_dump :: s_dump_req :: s_dump_wait :: s_dumped :: s_dump_replay_pending :: Nil = Enum(10)
+  val s_ready :: s_request :: s_wait :: s_victim_req :: s_victim_wait :: s_dump :: s_dump_req :: s_dump_wait :: s_dumped :: Nil = Enum(9)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
   state := Mux(io.htBase.orR && io.htlb_enabled, OptimizationBarrier(next_state), s_ready)
@@ -216,7 +216,6 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     io.resp(w).miss := (do_refill && !io.req(w).bits.passthrough) || htlb_miss(w) || (htlb_hit(w) && cross_pages && phys(w))
     io.resp(w).addr := Mux(!hm_enabled(w), effective_address,
                           Mux (!io.resp(w).miss, 
-                              //  io.req(w).bits.haddr(xLen - 2, 0), 0.U))
                                addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0), 0.U))
     io.resp(w).phys := Mux(hm_enabled(w) && htlb_hit(w), phys(w), false.B)
     io.resp(w).try_phys := Mux(hm_enabled(w) && htlb_hit(w), try_phys(w) && !cross_pages, false.B)
@@ -227,7 +226,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       entries(hid_set(w))(OHToUInt(real_hits(w))).invalidate()
     }
 
-    midas.targetutils.PerfCounter(do_refill && io.req(0).bits.passthrough, "l1_htlb_unnecessary_miss", "L1 HTLB Unnecessary Miss")
+    // midas.targetutils.PerfCounter(do_refill && io.req(0).bits.passthrough, "l1_htlb_unnecessary_miss", "L1 HTLB Unnecessary Miss")
 
     // you will try phys or have phys, check if you cross pages
     when (hm_enabled(w) && (htlb_hit(w) && (try_phys(w) || phys(w)))) {
@@ -460,8 +459,6 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
       when (next_state === s_dump) {
         // midas.targetutils.SynthesizePrintf(printf("[HD%d,%d\n", dumped_entry_idx, hid_to_dump))
-      } .elsewhen (next_state === s_dump_replay_pending) {
-        // midas.targetutils.SynthesizePrintf(printf("[HN,%d,%d\n", dumped_entry_idx, hid_to_dump))
       }
     }
     is (s_dump) {
@@ -473,12 +470,6 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
     is (s_dumped) {
       next_state := Mux(!io.htDump.orR, s_ready, s_dumped)
-    }
-    is (s_dump_replay_pending) {
-      next_state := Mux(io.ptw_done, s_dump_req, s_dump_replay_pending)
-      when (next_state === s_dump_req) {
-        // midas.targetutils.SynthesizePrintf(printf("[HDr%d,%d\n", dumped_entry_idx, hid_to_dump))
-      }
     }
   }
 

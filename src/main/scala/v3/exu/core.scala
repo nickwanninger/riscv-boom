@@ -300,6 +300,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   csr.io.customCSRs(3).set := io.htw.htInvald
   csr.io.customCSRs(3).sdata := 0.U
 
+  csr.io.customCSRs(5).set := io.lsu.perf.tlbMiss
+  csr.io.customCSRs(5).sdata := csr.io.customCSRs(5).value + 1.U
+
   io.htw.clear_htlb := csr.io.clear_htlb
   io.lsu.clear_htlb := csr.io.clear_htlb
 
