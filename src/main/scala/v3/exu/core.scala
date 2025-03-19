@@ -292,10 +292,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     midas.targetutils.SynthesizePrintf(printf("[Core] HTLBs Invalidation Completed\n"))
   }
 
-  // TODO: fix possible consistency violation or worse if user tries to set csr while dump hasn't finished
   csr.io.customCSRs(2).set := io.htw.htDumped
   csr.io.customCSRs(2).sdata := 0.U
-  csr.io.clear_mie := Mux(csr.io.customCSRs(2).value.orR, ~io.htw.htDumped.orR, false.B)
 
   csr.io.customCSRs(3).set := io.htw.htInvald
   csr.io.customCSRs(3).sdata := 0.U

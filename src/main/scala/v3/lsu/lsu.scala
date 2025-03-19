@@ -265,6 +265,12 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.perf.acquire := io.dmem.perf.acquire
   io.core.perf.release := io.dmem.perf.release
 
+  midas.targetutils.PerfCounter(
+    io.dmem.perf.acquire,
+    "dcache_miss", 
+    "Data Cache Miss"
+  )
+
   val htlb = Module(new HTLB(HTLBConfig(boomParams.nL1HTLBSets, boomParams.nL1HTLBWays)))
   io.htw <> htlb.io.htw
   io.htlb_mem <> htlb.io.mem
@@ -274,7 +280,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   htlb.io.ptw_done <> io.ptw_done
   htlb.io.clear_htlb := io.core.clear_htlb
 
-  val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase =/= 0.U && (io.core.status.dprv + 1.U) <= ENABLE_HTLB.U
+  val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase.orR && (((io.core.status.dprv + 1.U) <= ENABLE_HTLB.U) || (io.core.htDump.orR))
 
   val clear_store     = WireInit(false.B)
   val live_store_mask = RegInit(0.U(numStqEntries.W))
@@ -733,7 +739,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                                           Mux(will_fire_hella_incoming(w), true.B, !((is_ht_infinite || (!is_ht_infinite && hid(w) < io.core.htSize)) && is_handle(w))), true.B))
   htlb.io.ht_size := io.core.htSize
   htlb.io.htlb_enabled := htlb_enabled
-  htlb.io.pht_enabled := htlb_enabled && ENABLE_PHT.B
+  htlb.io.pht_enabled := ENABLE_PHT.B
 
   for (w <- 0 until memWidth) {
     htlb.io.req(w).valid            := exe_htlb_valid(w)
@@ -1115,7 +1121,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   } else {
     widthMap(w => RegNext(exe_tlb_miss(w)) && !fired_hella_incoming(w))
   }
-  when (htlb_enabled) {
+  when (htlb_enabled && false.B) {
     midas.targetutils.SynthesizePrintf(printf("mmiss: %x,%x,%x\n", mem_tlb_miss(0), exe_tlb_miss(0), fired_hella_incoming(0)))
   }
   val mem_tlb_uncacheable      = RegNext(exe_tlb_uncacheable)

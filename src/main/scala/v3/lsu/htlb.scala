@@ -118,7 +118,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val s_ready :: s_request :: s_wait :: s_victim_req :: s_victim_wait :: s_dump :: s_dump_req :: s_dump_wait :: s_dumped :: Nil = Enum(9)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
-  state := Mux(io.htBase.orR && io.htlb_enabled, OptimizationBarrier(next_state), s_ready)
+  state := Mux(io.htlb_enabled, OptimizationBarrier(next_state), s_ready)
 
   when (io.htBase =/= 0.U && state =/= next_state) {
     // midas.targetutils.SynthesizePrintf(printf("[HTLB] State: %d, Next_State: %d\n", state, next_state))
@@ -397,7 +397,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   io.mem.keep_clock_enabled := false.B
   io.mem.req.valid := state === s_dump_req
-  io.mem.req.bits.phys := false.B
+  io.mem.req.bits.phys := io.pht_enabled
   io.mem.req.bits.cmd := M_XWR
   io.mem.req.bits.size := 2.U // log2Ceil(xLen/8).U
   io.mem.req.bits.signed := false.B

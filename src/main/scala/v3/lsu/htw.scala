@@ -706,7 +706,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val (cache, _) = top_level_cache.get
       val cache_entry = cache(getIndex(hid))
       midas.targetutils.PerfCounter(
-        (!cache_entry.valid && cache_entry.tag === getTag(hid)) && state === s_req, 
+        !(cache_entry.valid && cache_entry.tag === getTag(hid)) && state === s_req, 
         "htw_cache_miss", 
         "Handle Table Walk Cache Miss"
       )
@@ -716,7 +716,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.mem.keep_clock_enabled := false.B
 
     io.mem.req.valid := state === s_req  || state === s_dump_req || state === s_req2
-    io.mem.req.bits.phys := io.requestor.pht_enabled && !(state === s_dump_req)
+    io.mem.req.bits.phys := io.requestor.pht_enabled
     io.mem.req.bits.cmd := Mux(state === s_dump_req, M_XWR, M_XRD)
     io.mem.req.bits.size := Mux(state === s_dump_req, 2.U, log2Ceil(xLen / 8).U)
     io.mem.req.bits.signed := false.B
