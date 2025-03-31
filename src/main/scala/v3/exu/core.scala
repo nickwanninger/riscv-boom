@@ -1439,6 +1439,14 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.lsu.htInval := custom_csrs.htInval
   io.lsu.htSize := custom_csrs.htSize
 
+  if (boomParams.enableHandleTracing) {
+    when (custom_csrs.handleTracing =/= 0.U && custom_csrs.handleTracing(63) === 0.U) {
+      midas.targetutils.SynthesizePrintf(printf("a%x\n", custom_csrs.handleTracing(62, 0)))
+    } .elsewhen(custom_csrs.handleTracing =/= 0.U && custom_csrs.handleTracing(63) === 1.U) {
+      midas.targetutils.SynthesizePrintf(printf("f%x\n", custom_csrs.handleTracing(62, 0)))
+    }
+  }
+
   //-------------------------------------------------------------
   //-------------------------------------------------------------
   // Page Table Walker

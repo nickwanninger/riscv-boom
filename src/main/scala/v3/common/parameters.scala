@@ -109,7 +109,8 @@ case class BoomCoreParams(
   nL1HTLBSets: Int = 4,
   nL2HTLBWays: Int = 8,
   nL2HTLBSets: Int = 64,
-  enableTwoStageHTW: Boolean = false
+  enableTwoStageHTW: Boolean = false,
+  enableHandleTracing: Boolean = false
 // DOC include end: BOOM Parameters
 ) extends freechips.rocketchip.tile.CoreParams
 {
@@ -175,6 +176,10 @@ class BoomCustomCSRs(implicit p: Parameters) extends freechips.rocketchip.tile.C
 
   override def l2TLBAccessCSR = {
     Some(CustomCSR(l2TLBAccessCSRId,  (BigInt(1) << 64) - 1, Some(BigInt(0x00000000L))))
+  }
+
+  override def handleTracingCSR = {
+    Some(CustomCSR(handleTracingCSRId,  (BigInt(1) << 64) - 1, Some(BigInt(0x00000000L))))
   }
 
   def disableOOO = getOrElse(chickenCSR, _.value(3), true.B)

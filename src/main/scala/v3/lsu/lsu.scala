@@ -745,7 +745,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.req(w).valid            := exe_htlb_valid(w)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_htlb_passthr(w)
-    when (htlb.io.req(w).valid && !exe_htlb_passthr(w)) {
+    when (htlb.io.req(w).valid && !exe_htlb_passthr(w) && boomParams.enableHandleTracing.B) {
         // midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
         midas.targetutils.SynthesizePrintf(printf("h%x,%d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
     }
