@@ -19,8 +19,7 @@ import freechips.rocketchip.diplomacy.BufferParams.pipe
 class HTE(implicit p: Parameters) extends BoomBundle()(p) {
   val phys = Bool()
   val try_phys = Bool()
-  val ae = Bool()
-  val reserved = UInt((64 - maxSVAddrBits - 3).W)
+  val reserved = UInt((64 - maxSVAddrBits - 2).W)
   val addr = UInt(maxSVAddrBits.W)
 }
 
@@ -31,7 +30,6 @@ class L2HTLBEntry(nSets: Int)(implicit p: Parameters) extends BoomBundle()(p) {
   val try_phys = Bool()
   val phys = Bool()
   val addr = UInt(maxSVAddrBits.W)
-  val ae = Bool()
 }
 
 class HTWReq(implicit p: Parameters) extends BoomBundle()(p) {
@@ -46,7 +44,6 @@ class EvictionReq(implicit p: Parameters) extends BoomBundle()(p) {
   val addr = UInt(maxSVAddrBits.W)
   val try_phys = Bool()
   val phys = Bool()
-  val ae = Bool()
   val hid = UInt(handleBits.W)
 }
 
@@ -104,9 +101,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
   val resp_valid = RegNext(RegInit(false.B))
 
-  when (io.requestor.htlb_enabled && state =/= next_state) {
-    midas.targetutils.SynthesizePrintf(printf("[H2%d,%d\n", state, next_state))
-  }
+  // when (io.requestor.htlb_enabled && state =/= next_state) {
+  //   midas.targetutils.SynthesizePrintf(printf("[H2%d,%d\n", state, next_state))
+  // }
 
   val clock_en =
     state =/= s_ready || l2_refill_wire || io.requestor.req.valid || io.dpath.customCSRs.disableDCacheClockGate
@@ -177,10 +174,10 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         cache(fill_idx).tag := getTag(hid)
         cache(fill_idx).data := mem_resp_data
 
-        midas.targetutils.SynthesizePrintf(printf(
-          "[HTW] Cache fill: ind0=%d (idx=%d tag=%x) ind1=%d data=%x\n",
-          hid >> entries_per_ht_bits, fill_idx, getTag(hid), inner_index, mem_resp_data
-        ))
+        // midas.targetutils.SynthesizePrintf(printf(
+        //   "[HTW] Cache fill: ind0=%d (idx=%d tag=%x) ind1=%d data=%x\n",
+        //   hid >> entries_per_ht_bits, fill_idx, getTag(hid), inner_index, mem_resp_data
+        // ))
       }
 
       when (io.dpath.clear_htlb) {
@@ -265,7 +262,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           entry.addr := victim_hte.addr
           entry.tag := v_tag
           entry.phys := victim_hte.phys
-          entry.ae := victim_hte.ae
           // if all the way are valid, use plru to select one way to be replaced,
           // otherwise use PriorityEncoderOH to select one
           val wmask =
@@ -281,7 +277,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
             VecInit(Seq.fill(boomParams.nL2HTLBWays)(code.encode(entry.asUInt))),
             wmask.asBools
           )
-          midas.targetutils.SynthesizePrintf(printf("[Hn%x,%d,%x,%d\n", entry.addr, v_idx, wmask, v_tag))
+          // midas.targetutils.SynthesizePrintf(printf("[Hn%x,%d,%x,%d\n", entry.addr, v_idx, wmask, v_tag))
           // midas.targetutils.SynthesizePrintf(printf("[HTW] Inserting with addr: %x into set %d, way (%x) %d (tag)\n", entry.addr, v_idx, wmask, v_tag))
 
           val mask = UIntToOH(v_idx)
@@ -319,9 +315,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val s2_hit = s2_valid && s2_hit_vec.orR
 
       io.dpath.perf.l2miss := s2_valid && !(s2_hit_vec.orR)
-      when(io.dpath.perf.l2miss) {
-        midas.targetutils.SynthesizePrintf(printf("[H2m\n"))
-      }
+      // when(io.dpath.perf.l2miss) {
+      //   midas.targetutils.SynthesizePrintf(printf("[H2m\n"))
+      // }
       midas.targetutils.PerfCounter(io.dpath.perf.l2miss, "l2_htlb_miss", "L2 HTLB Miss")
 
       when(s2_hit) {
@@ -334,7 +330,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       s2_hte.reserved := 0.U
       s2_hte.try_phys := s2_hit_entry.try_phys
       s2_hte.phys := s2_hit_entry.phys
-      s2_hte.ae := s2_hit_entry.ae
 
       for (way <- 0 until boomParams.nL2HTLBWays) {
         ccover(
@@ -361,9 +356,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       io.dpath.htDumped := set_idx === boomParams.nL2HTLBSets.U && state === s_dump
       io.dpath.htInvald := state === s_invalidated
 
-      when (io.dpath.htDumped) {
-        midas.targetutils.SynthesizePrintf(printf("[H2D\n"))
-      }
+      // when (io.dpath.htDumped) {
+      //   midas.targetutils.SynthesizePrintf(printf("[H2D\n"))
+      // }
 
       val pipeline_stage = RegInit(0.U(2.W))
 
@@ -410,7 +405,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         ds2_hte.tag := ds2_hit_entry.tag
         ds2_hte.try_phys := DontCare
         ds2_hte.phys := DontCare
-        ds2_hte.ae := DontCare
 
         when(ds2_hit && dr_valid_vec(way)) {
           hid_to_dump := Cat(Mux1H(UIntToOH(way), ds2_entry_vec).tag, set_idx(idxBits-1,0))
@@ -526,7 +520,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val pte = WireDefault(tmp)
     pte.try_phys := true.B
     pte.phys := false.B
-    pte.ae := RegNext(io.mem.s2_xcpt.asUInt =/= 0.U)
 
     found_hte := OptimizationBarrier(
       Mux(l2_hit && !l2_error, l2_hte, Mux(mem_resp_valid, pte, found_hte))
@@ -554,13 +547,13 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           val cache_hit = cache(getIndex(hid)).valid && 
                          cache(getIndex(hid)).tag === getTag(hid)
           
-          midas.targetutils.SynthesizePrintf(printf(
-            "[H2W1%d,%x,%x,%x\n",
-            cache_hit,
-            getIndex(hid),
-            getTag(hid),
-            io.mem.req.bits.addr
-          ))
+          // midas.targetutils.SynthesizePrintf(printf(
+          //   "[H2W1%d,%x,%x,%x\n",
+          //   cache_hit,
+          //   getIndex(hid),
+          //   getTag(hid),
+          //   io.mem.req.bits.addr
+          // ))
           
           when (cache_hit) {
             next_state := s_req2
@@ -620,26 +613,25 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       is (s_wait6) {
         next_state := Mux(mem_resp_valid, s_ready, Mux(io.mem.s2_nack, s_req2, s_wait6))
         resp_valid := mem_resp_valid
-        when (mem_resp_valid) {
-          midas.targetutils.SynthesizePrintf(printf(
-            "[H2n%x,%x,%d,%d\n",
-            pte.reserved,
-            pte.addr,
-            pte.try_phys,
-            pte.ae
-          ))
-        }
+        // when (mem_resp_valid) {
+        //   midas.targetutils.SynthesizePrintf(printf(
+        //     "[H2n%x,%x,%d\n",
+        //     pte.reserved,
+        //     pte.addr,
+        //     pte.try_phys,
+        //   ))
+        // }
       }
       is(s_victim1) {
         next_state := s_victim2
-        midas.targetutils.SynthesizePrintf(printf("[H2n%d,%x,%d,%d,%d\n", victim_hte.hid, victim_hte.addr, victim_hte.phys, victim_hte.try_phys, victim_hte.ae))
+        // midas.targetutils.SynthesizePrintf(printf("[H2n%d,%x,%d\n", victim_hte.hid, victim_hte.addr, victim_hte.try_phys))
       }
       is(s_victim2) {
         next_state := s_victim3
       }
       is(s_victim3) {
         next_state := s_ready
-        midas.targetutils.SynthesizePrintf(printf("[H2v%d,%x,%d,%d,%d\n", victim_hte.hid, victim_hte.addr, victim_hte.phys, victim_hte.try_phys, victim_hte.ae))
+        // midas.targetutils.SynthesizePrintf(printf("[H2v%d,%x,%d\n", victim_hte.hid, victim_hte.addr, victim_hte.try_phys))
       }
       is(s_invalidated) {
         // midas.targetutils.SynthesizePrintf(printf("[HiI\n"))
@@ -667,19 +659,18 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
     }
         
-    when (resp_valid) {
-      midas.targetutils.SynthesizePrintf(printf(
-        "[H2h%d,%x\n",
-        hid,
-        io.requestor.resp.bits.hte.addr
-      ))
+    // when (resp_valid) {
+    //   midas.targetutils.SynthesizePrintf(printf(
+    //     "[H2h%d,%x\n",
+    //     hid,
+    //     io.requestor.resp.bits.hte.addr
+    //   ))
       // midas.targetutils.SynthesizePrintf(printf(
       //   "[HTW] -> [HTLB] Found HID %d to be %x\n",
       //   hid,
       //   io.requestor.resp.bits.hte.addr
       // ))
-
-    }
+    // }
     
     // Hit Handling Logic or HTW response logic
     when(l2_hit && !l2_error) {
