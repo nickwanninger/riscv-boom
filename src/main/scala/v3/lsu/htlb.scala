@@ -118,9 +118,8 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val next_state = WireDefault(state)
   state := Mux(io.htlb_enabled, OptimizationBarrier(next_state), s_ready)
 
-  when (io.htBase =/= 0.U && state =/= next_state) {
-    // midas.targetutils.SynthesizePrintf(printf("[HTLB] State: %d, Next_State: %d\n", state, next_state))
-    // midas.targetutils.SynthesizePrintf(printf("[H%d,%d\n", state, next_state))
+  when (io.htBase =/= 0.U && state =/= next_state && boomParams.enableStateTracing.B) {
+    midas.targetutils.SynthesizePrintf(printf("[H%d,%d\n", state, next_state))
   }
 
   // Refill State
@@ -228,23 +227,14 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       }
     }
 
-    when(!io.resp(w).miss && io.req(w).valid && hm_enabled(w)) {
-      // midas.targetutils.SynthesizePrintf(printf(
-      //   "H%x,%d,%d,%x\n",
-      //   io.resp(w).addr,
-      //   io.resp(w).phys,
-      //   io.resp(w).try_phys,
-      //   io.req(w).bits.haddr,
-      // ))
-      //  midas.targetutils.SynthesizePrintf(printf(
-      //   "[HTLB] -> [LSU] %x %d %d (entry try_phys: %d) (for %x) ae: %d\n",
-      //   io.resp(w).addr,
-      //   io.resp(w).phys,
-      //   io.resp(w).try_phys,
-      //   try_phys(w),
-      //   io.req(w).bits.haddr,
-      //   io.resp(w).ae
-      // ))
+    when(!io.resp(w).miss && io.req(w).valid && hm_enabled(w) && boomParams.enableStateTracing.B) {
+      midas.targetutils.SynthesizePrintf(printf(
+        "H%x,%d,%d,%x\n",
+        io.resp(w).addr,
+        io.resp(w).phys,
+        io.resp(w).try_phys,
+        io.req(w).bits.haddr,
+      ))
     }
   }
 
@@ -276,19 +266,14 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     newEntry.addr := io.htw.resp.bits.hte.addr
     newEntry.try_phys := io.htw.resp.bits.hte.try_phys
 
-    // midas.targetutils.SynthesizePrintf(printf(
-    //   "[Hn%x,%d,%d\n",
-    //   newEntry.addr,
-    //   newEntry.phys,
-    //   hid_req,
-    // ))
-    // midas.targetutils.SynthesizePrintf(printf(
-    //   "[HTLB] New Entry: %x, %d, filling in (tag: %d), ae: %d \n",
-    //   newEntry.addr,
-    //   newEntry.phys,
-    //   hid_req,
-    //   newEntry.ae
-    // ))
+    when (boomParams.enableStateTracing.B) {
+      midas.targetutils.SynthesizePrintf(printf(
+        "Hn%x,%d,%d\n",
+        newEntry.addr,
+        newEntry.phys,
+        hid_req,
+      ))
+    }
 
     val (r_tag, r_idx) = Split(hid_req, idxBits)
     val candidate_repl_way = (if (cfg.nWays > 1)  l1_plru.way(r_idx) else 0.U)
@@ -408,25 +393,29 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       next_state := Mux(io.htDump.orR, s_dump, Mux(have_victim, s_victim_req, Mux(io.req(0).fire && htlb_miss(0), s_request, s_ready)))
 
       when (next_state === s_dump) {
-        // midas.targetutils.SynthesizePrintf(printf("[HD\n"))
+        if (boomParams.enableStateTracing.B) {
+          midas.targetutils.SynthesizePrintf(printf("[HD\n"))
+        }
         dumped_entry_idx := 0.U
       }
     }
     is (s_request) {
       next_state := Mux(io.htw.req.fire, s_wait, s_request)
-      // when(io.htw.req.fire) {
-      //   midas.targetutils.SynthesizePrintf(printf("[Hl%x\n", io.htw.req.bits.bits.hid))
-      // }
+      when(io.htw.req.fire && boomParams.enableStateTracing.B) {
+        midas.targetutils.SynthesizePrintf(printf("[Hl%x\n", io.htw.req.bits.bits.hid))
+      }
     }
     is (s_wait) {
       next_state := Mux(io.htw.resp.valid, s_ready, s_wait)
     }
     is (s_victim_req) {
       next_state := Mux(io.htw.evict.fire, s_victim_wait, s_victim_req)
-      // midas.targetutils.SynthesizePrintf(printf("[Hv%x,%x\n",
-      //   victim_entry.hid,
-      //   victim_entry.addr
-      // ))
+      if (boomParams.enableStateTracing.B) {
+        midas.targetutils.SynthesizePrintf(printf("[Hv%x,%x\n",
+          victim_entry.hid,
+          victim_entry.addr
+        ))
+      }
       when (io.htw.evict.fire) {
         have_victim := false.B
       }
@@ -435,24 +424,27 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       next_state := Mux(io.htw.evict_resp, s_ready, s_victim_wait)
     }
     is (s_dump_req) {
-      // midas.targetutils.SynthesizePrintf(printf("[Hd%d,%x\n", hid_to_dump, hte_dst_addr))
+      if (boomParams.enableStateTracing.B) {
+        midas.targetutils.SynthesizePrintf(printf("[Hd%d,%x\n", hid_to_dump, hte_dst_addr))
+      }
       next_state := Mux(io.mem.req.fire, s_dump_wait, s_dump_req)
     }
     is (s_dump_wait) {
-      // midas.targetutils.SynthesizePrintf(printf("[Hd%d,%x\n", hid_to_dump, hte_dst_addr))
+      if (boomParams.enableStateTracing.B) {
+        midas.targetutils.SynthesizePrintf(printf("[Hd%d,%x\n", hid_to_dump, hte_dst_addr))
+      }
       next_state := Mux(mem_resp_valid, s_dump, Mux(io.mem.s2_nack, s_dump_req, s_dump_wait))
       dumped_entry_idx := Mux(mem_resp_valid, dumped_entry_idx + 1.U, dumped_entry_idx)
 
-      when (next_state === s_dump) {
-        // midas.targetutils.SynthesizePrintf(printf("[HD%d,%d\n", dumped_entry_idx, hid_to_dump))
+      when (next_state === s_dump && boomParams.enableStateTracing.B) {
+        midas.targetutils.SynthesizePrintf(printf("[HD%d,%d\n", dumped_entry_idx, hid_to_dump))
       }
     }
     is (s_dump) {
       next_state := Mux(dumped_entry_idx === (cfg.nSets * cfg.nWays).U, s_dumped, s_dump_req)
-      // next_state := Mux(set_idx === (cfg.nSets - 1).U && ways_dumped === cfg.nWays.U, s_dumped, s_dump_req)
-      // when (next_state === s_dumped) {
-      //   midas.targetutils.SynthesizePrintf(printf("[HDD\n"))
-      // }
+      when (next_state === s_dumped && boomParams.enableStateTracing.B) {
+        midas.targetutils.SynthesizePrintf(printf("[HDD\n"))
+      }
     }
     is (s_dumped) {
       next_state := Mux(!io.htDump.orR, s_ready, s_dumped)
@@ -461,8 +453,8 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   // Reset Logic
   when(reset.asBool || io.clear_htlb) {
-    when (io.clear_htlb) {
-      // midas.targetutils.SynthesizePrintf(printf("[Hc\n"))
+    when (io.clear_htlb && boomParams.enableStateTracing.B) {
+      midas.targetutils.SynthesizePrintf(printf("[Hc\n"))
     }
     entries.foreach(_.foreach(_.invalidate()))
   }
@@ -471,10 +463,14 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   // NOTE: does this need to reset the state to s_ready? we already fence before/after the inval in the runtime.
   when (io.htInval.orR) {
     when (io.htInval === ((BigInt(1) << handleBits) - 1).U) {
-      // midas.targetutils.SynthesizePrintf(printf("[HI\n"))
+      if (boomParams.enableStateTracing.B) {
+        midas.targetutils.SynthesizePrintf(printf("[HI\n"))
+      }
       entries.foreach(_.foreach(_.invalidate()))
     }.otherwise {
-      // midas.targetutils.SynthesizePrintf(printf("[Hi%x\n", io.htInval))
+      if (boomParams.enableStateTracing.B) {
+        midas.targetutils.SynthesizePrintf(printf("[Hi%x\n", io.htInval))
+      }
       val (e_tag, e_idx) = Split(io.htInval, idxBits)
       for (e <- entries(e_idx)) {
         when(e_tag === e.tag) {

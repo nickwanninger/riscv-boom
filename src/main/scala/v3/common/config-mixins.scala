@@ -122,6 +122,14 @@ class WithHandleTracing extends Config((site, here, up) => {
   }
 })
 
+class WithStateTracing extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
+      enableStateTracing = true
+    )))
+  }
+})
+
 /**
  * 1-wide BOOM.
  */
