@@ -284,11 +284,11 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   (custom_csrs.csrs zip csr.io.customCSRs).map { case (lhs, rhs) => lhs <> rhs }
   io.htw.customCSRs <> custom_csrs
 
-  when (io.htw.htDumped) {
+  when (io.htw.htDumped && false.B) {
     midas.targetutils.SynthesizePrintf(printf("[Core] HTLB Dumping Completed, interrupts should be re-enabled\n"))
   }
 
-  when (io.htw.htInvald) {
+  when (io.htw.htInvald && false.B) {
     midas.targetutils.SynthesizePrintf(printf("[Core] HTLBs Invalidation Completed\n"))
   }
 
@@ -1439,11 +1439,19 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.lsu.htInval := custom_csrs.htInval
   io.lsu.htSize := custom_csrs.htSize
 
-  if (boomParams.enableHandleTracing) {
-    when (custom_csrs.handleTracing =/= 0.U && custom_csrs.handleTracing(63) === 0.U) {
+  val printed_handle_tracing = RegInit(false.B)
+  val prev_handle_tracing = RegNext(custom_csrs.handleTracing)
+  when (custom_csrs.handleTracing =/= prev_handle_tracing) {
+    printed_handle_tracing := false.B
+  }
+  val should_trace = custom_csrs.handleTracing =/= 0.U
+  when (boomParams.enableHandleTracing.B && should_trace && !printed_handle_tracing) {
+    when (custom_csrs.handleTracing(63) === 0.U) {
       midas.targetutils.SynthesizePrintf(printf("a%x\n", custom_csrs.handleTracing(62, 0)))
-    } .elsewhen(custom_csrs.handleTracing =/= 0.U && custom_csrs.handleTracing(63) === 1.U) {
+      printed_handle_tracing := should_trace
+    } .elsewhen(custom_csrs.handleTracing(63) === 1.U) {
       midas.targetutils.SynthesizePrintf(printf("f%x\n", custom_csrs.handleTracing(62, 0)))
+      printed_handle_tracing := should_trace
     }
   }
 

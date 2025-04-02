@@ -741,12 +741,14 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   htlb.io.htlb_enabled := htlb_enabled
   htlb.io.pht_enabled := ENABLE_PHT.B
 
+  val is_incoming = widthMap(w => will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w))
+
   for (w <- 0 until memWidth) {
     htlb.io.req(w).valid            := exe_htlb_valid(w)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_htlb_passthr(w)
-    when (htlb.io.req(w).valid && !exe_htlb_passthr(w) && boomParams.enableHandleTracing.B) {
-        // midas.targetutils.SynthesizePrintf(printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
+    when (htlb.io.req(w).valid && !exe_htlb_passthr(w) && boomParams.enableHandleTracing.B && is_incoming(w)) {
+        // midas.targetutils.synthesizeprintf(printf("[lsu] -> [htlb] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
         midas.targetutils.SynthesizePrintf(printf("h%x,%d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
     }
   }
