@@ -46,7 +46,6 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     val htInval = Input(UInt(handleBits.W))
     val htBase = Input(UInt(xLen.W))
     val kill = Input(Bool())
-    val ptw_done = Input(Bool())
     val clear_htlb = Input(Bool())
     val miss_rdy = Output(Bool())
     val ht_size = Input(UInt(xLen.W))

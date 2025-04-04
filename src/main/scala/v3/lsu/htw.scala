@@ -85,7 +85,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val requestor = Flipped(new HTLBHTWIO)
     val mem = new HellaCacheIO
     val dpath = new DatapathHTWIO
-    val ptw_done = Input(Bool())
   })
   io.dpath.customCSRs := DontCare
   io.dpath.perf.l1miss := io.requestor.l1miss
