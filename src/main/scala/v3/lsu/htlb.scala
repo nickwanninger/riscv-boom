@@ -393,7 +393,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       next_state := Mux(io.htDump.orR, s_dump, Mux(have_victim, s_victim_req, Mux(io.req(0).fire && htlb_miss(0), s_request, s_ready)))
 
       when (next_state === s_dump) {
-        if (boomParams.enableStateTracing.B) {
+        if (boomParams.enableStateTracing) {
           midas.targetutils.SynthesizePrintf(printf("[HD\n"))
         }
         dumped_entry_idx := 0.U
@@ -410,7 +410,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     }
     is (s_victim_req) {
       next_state := Mux(io.htw.evict.fire, s_victim_wait, s_victim_req)
-      if (boomParams.enableStateTracing.B) {
+      if (boomParams.enableStateTracing) {
         midas.targetutils.SynthesizePrintf(printf("[Hv%x,%x\n",
           victim_entry.hid,
           victim_entry.addr
@@ -424,13 +424,13 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       next_state := Mux(io.htw.evict_resp, s_ready, s_victim_wait)
     }
     is (s_dump_req) {
-      if (boomParams.enableStateTracing.B) {
+      if (boomParams.enableStateTracing) {
         midas.targetutils.SynthesizePrintf(printf("[Hd%d,%x\n", hid_to_dump, hte_dst_addr))
       }
       next_state := Mux(io.mem.req.fire, s_dump_wait, s_dump_req)
     }
     is (s_dump_wait) {
-      if (boomParams.enableStateTracing.B) {
+      if (boomParams.enableStateTracing) {
         midas.targetutils.SynthesizePrintf(printf("[Hd%d,%x\n", hid_to_dump, hte_dst_addr))
       }
       next_state := Mux(mem_resp_valid, s_dump, Mux(io.mem.s2_nack, s_dump_req, s_dump_wait))
@@ -463,12 +463,12 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   // NOTE: does this need to reset the state to s_ready? we already fence before/after the inval in the runtime.
   when (io.htInval.orR) {
     when (io.htInval === ((BigInt(1) << handleBits) - 1).U) {
-      if (boomParams.enableStateTracing.B) {
+      if (boomParams.enableStateTracing) {
         midas.targetutils.SynthesizePrintf(printf("[HI\n"))
       }
       entries.foreach(_.foreach(_.invalidate()))
     }.otherwise {
-      if (boomParams.enableStateTracing.B) {
+      if (boomParams.enableStateTracing) {
         midas.targetutils.SynthesizePrintf(printf("[Hi%x\n", io.htInval))
       }
       val (e_tag, e_idx) = Split(io.htInval, idxBits)
