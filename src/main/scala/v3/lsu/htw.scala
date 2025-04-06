@@ -100,9 +100,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
   val resp_valid = RegNext(RegInit(false.B))
 
-  // when (io.requestor.htlb_enabled && state =/= next_state) {
-  //   midas.targetutils.SynthesizePrintf(printf("[H2%d,%d\n", state, next_state))
-  // }
+  when (io.requestor.htlb_enabled && state =/= next_state && boomParams.enableStateTracing.B) {
+    midas.targetutils.SynthesizePrintf(printf("[H2%d,%d\n", state, next_state))
+  }
 
   val clock_en =
     state =/= s_ready || l2_refill_wire || io.requestor.req.valid || io.dpath.customCSRs.disableDCacheClockGate
@@ -172,11 +172,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         cache(fill_idx).valid := true.B
         cache(fill_idx).tag := getTag(hid)
         cache(fill_idx).data := mem_resp_data
-
-        // midas.targetutils.SynthesizePrintf(printf(
-        //   "[HTW] Cache fill: ind0=%d (idx=%d tag=%x) ind1=%d data=%x\n",
-        //   hid >> entries_per_ht_bits, fill_idx, getTag(hid), inner_index, mem_resp_data
-        // ))
       }
 
       when (io.dpath.clear_htlb) {
@@ -233,18 +228,13 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           .map(way => refill_s2_valid_vec(way) && refill_s2_rdata(way).error)
           .orR
         when(refill_s2_valid && refill_s2_error) { valid.foreach { _ := 0.U } }
-        // printf("s2_valid: %d, s2_error: %d\n", refill_s2_valid, refill_s2_error)
 
         val refill_s2_entry_vec =
           refill_s2_rdata.map(_.uncorrected.asTypeOf(new L2HTLBEntry(boomParams.nL2HTLBSets)))
         val refill_s2_hit_vec = (0 until boomParams.nL2HTLBWays).map(way =>
           refill_s2_valid_vec(way) && (v_tag === refill_s2_entry_vec(way).tag)
         )
-        // printf("r_idx: %x, r_tag: %x, entry-vec-addr: %x\n", r_idx, r_tag, s2_entry_vec(0).addr)
         val refill_s2_hit = refill_s2_valid && refill_s2_hit_vec.orR
-        // when (refill_s2_valid) {
-        //   printf("refill_s2_hit: %x on set: %d, tag: %d\n", refill_s2_hit_vec.asUInt, v_idx, v_tag)
-        // }
 
         when (refill_s2_valid && !refill_s2_hit_vec.orR) {
           val v_valid_vec = valid.map(_(v_idx)).asUInt
@@ -276,8 +266,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
             VecInit(Seq.fill(boomParams.nL2HTLBWays)(code.encode(entry.asUInt))),
             wmask.asBools
           )
-          // midas.targetutils.SynthesizePrintf(printf("[Hn%x,%d,%x,%d\n", entry.addr, v_idx, wmask, v_tag))
-          // midas.targetutils.SynthesizePrintf(printf("[HTW] Inserting with addr: %x into set %d, way (%x) %d (tag)\n", entry.addr, v_idx, wmask, v_tag))
+          if (boomParams.enableStateTracing) {
+            midas.targetutils.SynthesizePrintf(printf("[Hn%x,%d,%x,%d\n", entry.addr, v_idx, wmask, v_tag))
+          }
 
           val mask = UIntToOH(v_idx)
           printf("Mask: %x\n", mask)
@@ -355,9 +346,9 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       io.dpath.htDumped := set_idx === boomParams.nL2HTLBSets.U && state === s_dump
       io.dpath.htInvald := state === s_invalidated
 
-      // when (io.dpath.htDumped) {
-      //   midas.targetutils.SynthesizePrintf(printf("[H2D\n"))
-      // }
+      when (io.dpath.htDumped && boomParams.enableStateTracing.B) {
+        midas.targetutils.SynthesizePrintf(printf("[H2D\n"))
+      }
 
       val pipeline_stage = RegInit(0.U(2.W))
 
@@ -430,7 +421,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       when ((pipeline_stage >= 2.U && way_idx_update) || (set_clear && way_clear)) {
         pipeline_stage := 0.U
       } .elsewhen(state === s_dump ) {
-        // pipeline_stage := Mux(pipeline_stage === 2.U, 2.U, pipeline_stage + 1.U)
         pipeline_stage := pipeline_stage + 1.U
       }
 
@@ -441,21 +431,20 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
                          Mux(set_clear, 0.U,
                          set_idx)))
 
-      // printf("SetIdx: %d, WayIdx: %d\n", set_idx, way_idx)
-      // printf("SetIdxUpdate: %d, WayIdxUpdate: %d\n", set_idx_update, way_idx_update)
-      // printf("Pipeline Stage: %d\n", pipeline_stage)
-      // printf("WayClear: %d, SetClear: %d\n", way_clear, set_clear)
-
       val htInval = io.dpath.customCSRs.htInval
       when (htInval.orR) {
         when (htInval(handleBits -1, 0) === ((BigInt(1) << handleBits) - 1).U) {
-          // midas.targetutils.SynthesizePrintf(printf("[HI\n"))
+          if (boomParams.enableStateTracing) {
+            midas.targetutils.SynthesizePrintf(printf("[HI\n"))
+          }
           for (way <- 0 until boomParams.nL2HTLBWays) {
             valid(way) := 0.U
           }
           next_state := s_invalidated
         } .otherwise {
-          // midas.targetutils.SynthesizePrintf(printf("[Hi%x\n", htInval(handleBits -1, 0)))
+          if (boomParams.enableStateTracing) {
+            midas.targetutils.SynthesizePrintf(printf("[Hi%x\n", htInval(handleBits -1, 0)))
+          }
 
           val (i_tag, i_idx) = Split(htInval(handleBits-1, 0), idxBits)
 
@@ -490,7 +479,6 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
           when (s2_hit) {
             val mask = UIntToOH(i_idx)
             for (way <- 0 until boomParams.nL2HTLBWays) {
-              // printf("Way: %d, Valid: %x, Mask: %x\n", way.U, valid(way), mask)
               when(s2_hit_vec(way)) {
                 valid(way) := valid(way) & ~mask
               }
@@ -503,8 +491,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       }
     
       when (reset.asBool || io.dpath.clear_htlb) {
-        when (io.dpath.clear_htlb) {
-          // midas.targetutils.SynthesizePrintf(printf("[H2C\n"))
+        when (io.dpath.clear_htlb && boomParams.enableStateTracing.B) {
+          midas.targetutils.SynthesizePrintf(printf("[H2C\n"))
         }
         for (way <- 0 until boomParams.nL2HTLBWays) {
           valid(way) := 0.U
@@ -612,28 +600,34 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       is (s_wait6) {
         next_state := Mux(mem_resp_valid, s_ready, Mux(io.mem.s2_nack, s_req2, s_wait6))
         resp_valid := mem_resp_valid
-        // when (mem_resp_valid) {
-        //   midas.targetutils.SynthesizePrintf(printf(
-        //     "[H2n%x,%x,%d\n",
-        //     pte.reserved,
-        //     pte.addr,
-        //     pte.try_phys,
-        //   ))
-        // }
+        when (mem_resp_valid && boomParams.enableStateTracing.B) {
+          midas.targetutils.SynthesizePrintf(printf(
+            "[H2n%x,%x,%d\n",
+            pte.reserved,
+            pte.addr,
+            pte.try_phys,
+          ))
+        }
       }
       is(s_victim1) {
         next_state := s_victim2
-        // midas.targetutils.SynthesizePrintf(printf("[H2n%d,%x,%d\n", victim_hte.hid, victim_hte.addr, victim_hte.try_phys))
+        if (boomParams.enableStateTracing) {
+          midas.targetutils.SynthesizePrintf(printf("[H2n%d,%x,%d\n", victim_hte.hid, victim_hte.addr, victim_hte.try_phys))
+        }
       }
       is(s_victim2) {
         next_state := s_victim3
       }
       is(s_victim3) {
         next_state := s_ready
-        // midas.targetutils.SynthesizePrintf(printf("[H2v%d,%x,%d\n", victim_hte.hid, victim_hte.addr, victim_hte.try_phys))
+        if (boomParams.enableStateTracing) {
+          midas.targetutils.SynthesizePrintf(printf("[H2v%d,%x,%d\n", victim_hte.hid, victim_hte.addr, victim_hte.try_phys))
+        }
       }
       is(s_invalidated) {
-        // midas.targetutils.SynthesizePrintf(printf("[HiI\n"))
+        if (boomParams.enableStateTracing) {
+          midas.targetutils.SynthesizePrintf(printf("[HiI\n"))
+        }
         next_state := s_ready
       }
       is (s_dump) {
@@ -648,11 +642,15 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         next_state := Mux(io.mem.req.fire, s_dump_wait, s_dump_req)
       }
       is (s_dump_wait) {
-        // midas.targetutils.SynthesizePrintf(printf("[H2Dd%x,%x,%d\n", hid_to_dump, hte_dst_addr, mem_resp_valid))
+        if (boomParams.enableStateTracing) {
+          midas.targetutils.SynthesizePrintf(printf("[H2Dd%x,%x,%d\n", hid_to_dump, hte_dst_addr, mem_resp_valid))
+        }
         next_state := Mux(mem_resp_valid, s_dump, Mux(io.mem.s2_nack, s_dump_req, s_dump_wait))
 
         when(next_state === s_dump) {
-          // midas.targetutils.SynthesizePrintf(printf("[H2D%d,%d\n", dumped_entry_idx, hid_to_dump))
+          if (boomParams.enableStateTracing) {
+            midas.targetutils.SynthesizePrintf(printf("[H2D%d,%d\n", dumped_entry_idx, hid_to_dump))
+          }
           dumped_entry_idx := dumped_entry_idx + 1.U
         }
       }
@@ -731,25 +729,17 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     //   midas.targetutils.SynthesizePrintf(printf("[H2E%x\n", io.mem.s2_xcpt.asUInt))
     // }
 
-    // // Add near memory request logic:
-    // when (io.mem.req.valid) {
-    //   midas.targetutils.SynthesizePrintf(printf(
-    //     "[H2R%d,%x,%d,%d\n",
-    //     state,
-    //     walk_addr,
-    //     io.mem.req.bits.phys,
-    //     io.mem.s1_kill
-    //   ))
-    // }
+    when (io.mem.req.valid && boomParams.enableStateTracing.B) {
+      midas.targetutils.SynthesizePrintf(printf(
+        "[H2R%d,%x,%d,%d\n",
+        state,
+        walk_addr,
+        io.mem.req.bits.phys,
+        io.mem.s1_kill
+      ))
+    }
 
-    // Add near s1_kill logic:
-    // when (io.mem.s1_kill && RegNext(io.mem.req.valid)) {
-    //   midas.targetutils.SynthesizePrintf(printf(
-    //     "[H2K%d,%d\n",
-    //     l2_hit,
-    //     state
-    //   ))
-    // }
+
     midas.targetutils.PerfCounter(
       (state === s_req || state === s_req2),
       "htw_req_latency", 
