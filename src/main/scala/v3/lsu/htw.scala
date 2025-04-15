@@ -748,8 +748,8 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     midas.targetutils.PerfCounter(
       (state === s_wait1 || state === s_wait2 || state === s_wait3 || state === s_wait4 || state === s_wait5 || state === s_wait6),
-      "htw_total_latency", 
-      "Handle Table Walk Total Latency (cycles for both stages if two-stage walk)"
+      "htw_wait_latency", 
+      "htw_wait_latency"
     )
   }
 
