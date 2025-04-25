@@ -153,13 +153,13 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     val entries_per_ht_bits = 18  // log2(4096 * 512 / 8) = log2(262144)
     val inner_walk_base = RegInit(0.U(xLen.W))
 
-    val top_level_cache_size = 4
+    val top_level_cache_size = boomParams.HTWCacheSize
     def getIndex(hid: UInt) = (hid >> entries_per_ht_bits)(log2Ceil(top_level_cache_size)-1, 0)    // Bottom 4 bits of ind0 for 16 entries
     def getTag(hid: UInt) = (hid >> entries_per_ht_bits)(handleBits-19, log2Ceil(top_level_cache_size)) // log2Ceil(top_level_cache_size))  // Remaining bits of ind0
     def getInnerIndex(hid: UInt) = hid(entries_per_ht_bits-1, 0)  // Bottom 18 bits
 
     val top_level_cache = if (boomParams.enableTwoStageHTW) {
-      val cache = RegInit(VecInit(Seq.fill(16)(0.U.asTypeOf(new TopLevelCacheEntry))))
+      val cache = RegInit(VecInit(Seq.fill(boomParams.HTWCacheSize)(0.U.asTypeOf(new TopLevelCacheEntry))))
 
       val cache_lookup_idx = getIndex(hid)
       val cache_lookup_tag = getTag(hid)

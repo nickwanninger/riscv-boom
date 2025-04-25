@@ -111,7 +111,8 @@ case class BoomCoreParams(
   nL2HTLBSets: Int = 64,
   enableTwoStageHTW: Boolean = false,
   enableHandleTracing: Boolean = false,
-  enableStateTracing: Boolean = false
+  enableStateTracing: Boolean = false,
+  HTWCacheSize: Int = 4,
 // DOC include end: BOOM Parameters
 ) extends freechips.rocketchip.tile.CoreParams
 {

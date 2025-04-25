@@ -374,6 +374,18 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     assert(!(dis_ld_val && dis_st_val), "A UOP is trying to go into both the LDQ and the STQ")
   }
 
+  midas.targetutils.PerfCounter(
+    io.core.ldq_full.reduce(_||_),
+    "ldq_full",
+    "Load Queue Full"
+  )
+
+  midas.targetutils.PerfCounter(
+    io.core.stq_full.reduce(_||_),
+    "stq_full",
+    "Store Queue Full"
+  )
+
   ldq_tail := ld_enq_idx
   stq_tail := st_enq_idx
 
@@ -671,6 +683,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   require(memWidth <= 2)
 
+
   //--------------------------------------------
   // TLB Access
 
@@ -746,31 +759,13 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_htlb_passthr(w)
     when (htlb.io.req(w).valid && !exe_htlb_passthr(w) && boomParams.enableHandleTracing.B && is_incoming(w)) {
-        // midas.targetutils.synthesizeprintf(printf("[lsu] -> [htlb] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
         midas.targetutils.SynthesizePrintf(printf("h%x,%d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
     }
   }
   htlb.io.kill                    := exe_kill.reduce(_||_)
 
 
-  // used to only be a miss if valid and it was a miss (or not ready)
-  // => paddr_valid if ((not valid) OR ((not a miss) and ready))
-  // but, now, if it's not valid, it could either be because it's not valid or because it was an htlb miss, but why tf am I anding it with valid? it nullifies the not valid case.
-
-  // manual expansion of the above (paddr_valid) would be
-    // (not tlb_valid) OR ((not a tlb_miss) AND (tlb_ready))
-    // ((not htlb_valid) && (not tlb_valid)) OR ((not a tlb_miss) AND (tlb_ready)) OR (((not htlb_valid) OR ((not a htlb_miss) AND (htlb_ready))) AND (htlb_passthrough))
-  
-
-  // in the yukon phys, this causes random segfaults.
-
-  // exe_tlb_valid(w) && (dtlb_miss || !dtlb_ready)
-
-  // dtlb.io.req(w).valid && (dtlb.io.resp(w).miss || !dtlb.io.req(w).ready)
-  // htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready)
-  // (htlb.io.req(w).valid && !exe_htlb_miss(w) && dtlb.io.req(w).bits.htlb_passthrough) || (!exe_tlb_miss(w) && dtlb.io.req(w).valid)
-  val exe_htlb_miss  = widthMap(w => Mux(htlb_enabled, htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready), false.B))
-
+  val exe_htlb_miss = widthMap(w => Mux(htlb_enabled, htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready), false.B))
   val exe_tlb_vaddr = widthMap(w => Mux(htlb_enabled, htlb.io.resp(w).addr, exe_htlb_vaddr(w)))
 
   val exe_passthr= widthMap(w =>
@@ -787,7 +782,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     dtlb.io.req(w).bits.v           := io.ptw.status.v
     dtlb.io.req(w).bits.prv         := io.ptw.status.prv
 
-    when (dtlb.io.req(w).valid && htlb_enabled && false.B) {
+    when (dtlb.io.req(w).valid && htlb_enabled && boomParams.enableStateTracing.B) {
       midas.targetutils.SynthesizePrintf(printf("t%x,%d,%d\n", dtlb.io.req(w).bits.vaddr, dtlb.io.req(w).bits.htlb_passthrough, dtlb.io.req(w).bits.passthrough))
     }
   }
@@ -817,7 +812,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     Mux(ae_ld(w), rocket.Causes.load_access.U,
                   rocket.Causes.store_access.U)))))))
   val mem_xcpt_vaddrs = RegNext(exe_tlb_vaddr)
-  // val mem_xcpt_vaddrs = RegNext(Mux(widthMap(w => htlb.io.resp(w).ae).reduce(_||_) && htlb_enabled && !ENABLE_PHT.B, ae_htw_addrs, exe_tlb_vaddr))
 
   for (w <- 0 until memWidth) {
     assert (!(dtlb.io.req(w).valid && exe_tlb_uop(w).is_fence), "Fence is pretending to talk to the TLB")
@@ -849,31 +843,13 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   when (htlb_enabled && !was_htlb) {
     was_htlb := htlb_enabled
   }
-  // when (mem_xcpt_valid && was_htlb) {
-  //   midas.targetutils.SynthesizePrintf(printf("xcpt cause: %x, vaddr: %x\n", mem_xcpt_cause, mem_xcpt_vaddr))
-  // }
   val exe_tlb_miss  = widthMap(w => exe_tlb_valid(w) && (dtlb.io.resp(w).miss || exe_htlb_miss(w) || !dtlb.io.req(w).ready))
-  // val exe_tlb_miss  = widthMap(w => exe_tlb_valid(w) && (dtlb.io.resp(w).miss || exe_htlb_miss(w) || !dtlb.io.req(w).ready) && !dtlb.io.req(w).bits.htlb_passthrough)
-  // when (exe_tlb_miss(0) && was_htlb) {
-  //   midas.targetutils.SynthesizePrintf(printf("miss: %d, %d, %d, %d, %d\n", dtlb.io.req(0).valid, dtlb.io.resp(0).miss, exe_htlb_miss(0), !dtlb.io.req(0).ready, !dtlb.io.req(0).bits.htlb_passthrough))
-  // }
   val exe_tlb_paddr = widthMap(w => Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits), exe_tlb_vaddr(w)(corePgIdxBits-1,0)))
-  // val exe_tlb_paddr = widthMap(w => Mux(!dtlb.io.req(w).bits.htlb_passthrough, Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits), exe_tlb_vaddr(w)(corePgIdxBits-1,0)), exe_tlb_vaddr(w)(paddrBits-1,0)))
   val exe_tlb_uncacheable = widthMap(w => !(dtlb.io.resp(w).cacheable))
-
   val small_handle_criterium = widthMap(w => !exe_htlb_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).try_phys)
 
   for (w <- 0 until memWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr || exe_req(w).bits.sfence.valid, "[lsu] paddrs should match.")
-
-    // when(!exe_tlb_miss(w) && htlb_enabled && exe_tlb_vaddr(w) =/= 0.U) {
-    //   midas.targetutils.SynthesizePrintf(printf("T%x,%x\n", exe_tlb_vaddr(w), exe_tlb_paddr(w)))
-    // }
-
-    // debug for printing paddr for small handle optimization
-    // when (!exe_htlb_miss(w) && !exe_tlb_miss(w)) {
-    //   printf("exe_tlb_paddr(%d): %x, htlb: %x, vaddr: %x\n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr, exe_tlb_vaddr(w))
-    // }
 
     htlb.io.tlb(w).valid := dtlb.io.req(w).valid && !exe_tlb_miss(w) && small_handle_criterium(w)
     htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)(xLen-2, handleOffsetBits)
@@ -920,10 +896,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val s0_executing_loads = WireInit(VecInit((0 until numLdqEntries).map(x=>false.B)))
 
 
-  // val paddr_valid = Wire(Vec(memWidth, Bool()))
-  // this one does not work, segfaults everywhere
-  // val paddr_valid = widthMap(w => ((!htlb.io.req(w).valid && !dtlb.io.req(w).valid) || (!dtlb.io.resp(w).miss && dtlb.io.req(w).ready)) || (!exe_htlb_miss(w) && dtlb.io.req(w).bits.htlb_passthrough))
-
   for (w <- 0 until memWidth) {
     dmem_req(w).valid := false.B
     dmem_req(w).bits.uop   := NullMicroOp
@@ -932,10 +904,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     dmem_req(w).bits.is_hella := false.B
 
     io.dmem.s1_kill(w) := false.B
-
-    // is this an edge case with valid? like for invalid entries, we'd say paddr is not a valid, mark it as a miss, stall somewhere. this bottom worked fine usually, started from this.
-    // paddr_valid(w) := (!exe_tlb_miss(w) && dtlb.io.req(w).valid) || (htlb.io.req(w).valid && !exe_htlb_miss(w) && dtlb.io.req(w).bits.htlb_passthrough)
-    // printf("addr: %x, paddr: %x, valid: %d, htlb_passthrough: %d, tlb_miss: %d, htlb_miss: %d\n", exe_tlb_vaddr(w), exe_tlb_paddr(w), !exe_tlb_miss(w)(w), dtlb.io.req(w).bits.htlb_passthrough, exe_tlb_miss(w), exe_htlb_miss(w))
 
     when (will_fire_load_incoming(w)) {
       dmem_req(w).valid      := !exe_tlb_miss(w) && !exe_tlb_uncacheable(w)
@@ -1013,12 +981,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       ldq(ldq_idx).bits.addr.bits           := Mux(exe_htlb_miss(w), exe_htlb_vaddr(w), Mux(exe_tlb_miss(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)))
       ldq(ldq_idx).bits.uop.pdst            := exe_tlb_uop(w).pdst
       ldq(ldq_idx).bits.addr_is_virtual     := exe_tlb_miss(w)
-      // ldq(ldq_idx).bits.haddr               := Mux(ldq(ldq_idx).bits.haddr === 0.U, exe_htlb_vaddr(w), ldq(ldq_idx).bits.addr.bits)
-      // is_virtual is same as below with standard boolean algebra
-      // ((exe_htlb_miss(w) || !dtlb.io.req(w).htlb_passthrough) && exe_tlb_miss(w))
       ldq(ldq_idx).bits.addr_is_uncacheable := exe_tlb_uncacheable(w) && !exe_tlb_miss(w)
 
-      printf("ldq_idx: %d, addr: %x, valid: %d, is_virtual: %d, is_uncacheable: %d\n", ldq_idx, ldq(ldq_idx).bits.addr.bits, ldq(ldq_idx).bits.addr.valid, ldq(ldq_idx).bits.addr_is_virtual, ldq(ldq_idx).bits.addr_is_uncacheable)
 
       assert(!(will_fire_load_incoming(w) && ldq_incoming_e(w).bits.addr.valid),
         "[lsu] Incoming load is overwriting a valid address")
@@ -1033,7 +997,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       stq(stq_idx).bits.addr.bits  := Mux(exe_htlb_miss(w), exe_htlb_vaddr(w), Mux(exe_tlb_miss(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)))
       stq(stq_idx).bits.uop.pdst   := exe_tlb_uop(w).pdst // Needed for AMOs
       stq(stq_idx).bits.addr_is_virtual := exe_tlb_miss(w)
-      // stq(stq_idx).bits.haddr               := Mux(stq(stq_idx).bits.haddr === 0.U, exe_htlb_vaddr(w), stq(stq_idx).bits.addr.bits)
       assert(!(will_fire_sta_incoming(w) && stq_incoming_e(w).bits.addr.valid),
         "[lsu] Incoming store is overwriting a valid address")
 
@@ -1472,6 +1435,11 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       // We have to re-execute this!
       when (io.dmem.nack(w).bits.is_hella)
       {
+        midas.targetutils.PerfCounter(
+          io.dmem.perf.acquire && io.dmem.nack(w).bits.is_hella,
+          "dcache_hella_nacks", 
+          "Data Cache Hella Nacks"
+        )
         assert(hella_state === h_wait || hella_state === h_dead)
       }
         .elsewhen (io.dmem.nack(w).bits.uop.uses_ldq)
