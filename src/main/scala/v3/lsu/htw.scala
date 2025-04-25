@@ -308,7 +308,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       // when(io.dpath.perf.l2miss) {
       //   midas.targetutils.SynthesizePrintf(printf("[H2m\n"))
       // }
-      midas.targetutils.PerfCounter(io.dpath.perf.l2miss, "l2_htlb_miss", "L2 HTLB Miss")
+      midas.targetutils.PerfCounter(io.dpath.perf.l2miss, "l2_htlb_miss", "l2_htlb_miss")
 
       when(s2_hit) {
         assert((PopCount(s2_hit_vec) === 1.U) || s2_error, "L2 HTLB multi-hit")
@@ -696,7 +696,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       midas.targetutils.PerfCounter(
         !(cache_entry.valid && cache_entry.tag === getTag(hid)) && state === s_req, 
         "htw_cache_miss", 
-        "Handle Table Walk Cache Miss"
+        "htw_cache_miss", 
       )
     }
 
@@ -743,7 +743,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     midas.targetutils.PerfCounter(
       (state === s_req || state === s_req2),
       "htw_req_latency", 
-      "Handle Table Walk Request Latency (cycles for both stages if two-stage walk)"
+      "htw_req_latency", 
     )
 
     midas.targetutils.PerfCounter(

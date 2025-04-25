@@ -272,7 +272,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
 
   val tlb_hit = widthMap(w => real_hits(w).orR)
   val tlb_miss = widthMap(w => vm_enabled(w) && !bad_va(w) && !tlb_hit(w))
-  midas.targetutils.PerfCounter(tlb_miss.orR, "l1_tlb_miss", "L1 TLB Miss")
+  midas.targetutils.PerfCounter(tlb_miss.orR, "l1_tlb_miss", "l1_tlb_miss")
 
   val sectored_plru = new PseudoLRU(sectored_entries.size)
   val superpage_plru = new PseudoLRU(superpage_entries.size)
@@ -290,7 +290,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   // a miss on duplicate entries.
   val multipleHits = widthMap(w => PopCountAtLeast(real_hits(w), 2))
 
-  midas.targetutils.PerfCounter(do_refill && io.req(0).bits.passthrough, "l1_tlb_unnecessary_miss", "L1 TLB Unnecessary Miss")
+  midas.targetutils.PerfCounter(do_refill && io.req(0).bits.passthrough, "l1_tlb_unnecessary_miss", "l1_tlb_unmiss")
 
   io.miss_rdy := state === s_ready
   for (w <- 0 until memWidth) {

@@ -267,7 +267,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   midas.targetutils.PerfCounter(
     io.dmem.perf.acquire,
     "dcache_miss", 
-    "Data Cache Miss"
+    "dcache_miss", 
   )
 
   val htlb = Module(new HTLB(HTLBConfig(boomParams.nL1HTLBSets, boomParams.nL1HTLBWays)))
@@ -377,13 +377,13 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   midas.targetutils.PerfCounter(
     io.core.ldq_full.reduce(_||_),
     "ldq_full",
-    "Load Queue Full"
+    "ldq_full",
   )
 
   midas.targetutils.PerfCounter(
     io.core.stq_full.reduce(_||_),
     "stq_full",
-    "Store Queue Full"
+    "stq_full",
   )
 
   ldq_tail := ld_enq_idx
@@ -1438,7 +1438,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         midas.targetutils.PerfCounter(
           io.dmem.perf.acquire && io.dmem.nack(w).bits.is_hella,
           "dcache_hella_nacks", 
-          "Data Cache Hella Nacks"
+          "dcache_hella_nacks", 
         )
         assert(hella_state === h_wait || hella_state === h_dead)
       }

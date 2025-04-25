@@ -357,7 +357,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   // midas.targetutils.SynthesizePrintf(printf("set_idx: %d, ways_dumped: %d\n", set_idx, ways_dumped))
 
   io.htw.l1miss := do_refill || htlb_miss.orR
-  midas.targetutils.PerfCounter(htlb_miss.orR, "l1_htlb_miss", "L1 HTLB Miss")
+  midas.targetutils.PerfCounter(htlb_miss.orR, "l1_htlb_miss", "l1_htlb_miss")
   when(io.htw.l1miss) {
     printf("[HTLB] L1 Miss\n")
   }
