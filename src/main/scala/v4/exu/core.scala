@@ -311,19 +311,25 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.ifu.enable_bpd := custom_csrs.enableBPD
   io.htw.customCSRs <> custom_csrs
 
-  when (io.htw.htDumped) {
-    printf("trying to end dumping ... %x\n", ~(io.htw.htDumped.asUInt))
-  } 
+  when (io.htw.htDumped && false.B) {
+    midas.targetutils.SynthesizePrintf(printf("[Core] HTLB Dumping Completed, interrupts should be re-enabled\n"))
+  }
 
-  // TODO: fix possible consistency violation or worse if user tries to set csr while dump hasn't finished
-  csr.io.customCSRs(4).set := io.htw.htDumped
-  csr.io.customCSRs(4).sdata := 0.U
-  // TODO: fix this, it's either janky or perfectly correct
-  // csr.io.clear_mie := false.B
+  when (io.htw.htInvald && false.B) {
+    midas.targetutils.SynthesizePrintf(printf("[Core] HTLBs Invalidation Completed\n"))
+  }
 
-  // when (csr.io.customCSRs(4).value.orR) {
-  //   printf("MStatus - MIE: %x\n", csr.io.status.mie)
-  // }
+  csr.io.customCSRs(2).set := io.htw.htDumped
+  csr.io.customCSRs(2).sdata := 0.U
+
+  csr.io.customCSRs(3).set := io.htw.htInvald
+  csr.io.customCSRs(3).sdata := 0.U
+
+  csr.io.customCSRs(5).set := io.lsu.perf.tlbMiss
+  csr.io.customCSRs(5).sdata := csr.io.customCSRs(5).value + 1.U
+
+  io.htw.clear_htlb := csr.io.clear_htlb
+  io.lsu.clear_htlb := csr.io.clear_htlb
 
   //val icache_blocked = !(io.ifu.fetchpacket.valid || RegNext(io.ifu.fetchpacket.valid))
   val icache_blocked = false.B
@@ -1374,13 +1380,24 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   io.lsu.htBase := custom_csrs.htBase
   io.lsu.htDump := custom_csrs.htDump
+  io.lsu.htInval := custom_csrs.htInval
+  io.lsu.htSize := custom_csrs.htSize
 
-  val htlb_enabled = (ENABLE_HTLB > 0).B && custom_csrs.htBase =/= 0.U && (csr.io.status.prv + 1.U) <= ENABLE_HTLB.U
-
-  // Create a default invalid IOBundle
-  val defaultInvalid = Wire(Valid(new freechips.rocketchip.rocket.SFenceReq))
-  defaultInvalid.bits := DontCare
-  defaultInvalid.valid := false.B
+  val printed_handle_tracing = RegInit(false.B)
+  val prev_handle_tracing = RegNext(custom_csrs.handleTracing)
+  when (custom_csrs.handleTracing =/= prev_handle_tracing) {
+    printed_handle_tracing := false.B
+  }
+  val should_trace = custom_csrs.handleTracing =/= 0.U
+  when (boomParams.enableHandleTracing.B && should_trace && !printed_handle_tracing) {
+    when (custom_csrs.handleTracing(63) === 0.U) {
+      midas.targetutils.SynthesizePrintf(printf("a%x\n", custom_csrs.handleTracing(62, 0)))
+      printed_handle_tracing := should_trace
+    } .elsewhen(custom_csrs.handleTracing(63) === 1.U) {
+      midas.targetutils.SynthesizePrintf(printf("f%x\n", custom_csrs.handleTracing(62, 0)))
+      printed_handle_tracing := should_trace
+    }
+  }
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------
@@ -1390,7 +1407,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.ptw.status     := csr.io.status
   io.ptw.pmp        := csr.io.pmp
   io.ptw.sfence     := io.ifu.sfence
-  io.htw.sfence     := Mux(htlb_enabled, io.ifu.sfence, defaultInvalid)
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

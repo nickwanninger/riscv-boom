@@ -164,6 +164,9 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
 
   val htBase = Input(UInt(xLen.W))
   val htDump = Input(UInt(xLen.W))
+  val htInval = Input(UInt(xLen.W))
+  val htSize = Input(UInt(xLen.W))
+  val clear_htlb = Input(Bool())
 }
 
 class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
@@ -333,13 +336,21 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.perf.acquire := io.dmem.perf.acquire
   io.core.perf.release := io.dmem.perf.release
 
-  val htlb = Module(new HTLB(rocket.TLBConfig(1, dcacheParams.nTLBWays*dcacheParams.nTLBSets)))
+  midas.targetutils.PerfCounter(
+    io.dmem.perf.acquire,
+    "dcache_miss", 
+    "Data Cache Miss"
+  )
+
+  val htlb = Module(new HTLB(HTLBConfig(boomParams.nL1HTLBSets, boomParams.nL1HTLBWays)))
   io.htw <> htlb.io.htw
   io.htlb_mem <> htlb.io.mem
   htlb.io.htDump <> io.core.htDump
+  htlb.io.htInval <> io.core.htInval
+  htlb.io.htBase <> io.core.htBase
+  htlb.io.clear_htlb := io.core.clear_htlb
 
-  // TODO: condition this on privilege level when we get to linux and running things not in S
-  val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase =/= 0.U && (io.core.status.prv + 1.U) <= ENABLE_HTLB.U
+  val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase.orR && (((io.core.status.dprv + 1.U) <= ENABLE_HTLB.U) || (io.core.htDump.orR))
 
   val clear_store     = WireInit(false.B)
 
@@ -796,9 +807,16 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   //--------------------------------------------
   // HTLB Access
 
-  // val exe_h_passthr = widthMap(w => !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)))
-  val exe_h_passthr = widthMap(w => Mux(htlb_enabled, !(exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)), true.B))
+  val hid = widthMap(w => exe_htlb_vaddr(w)(xLen-2, handleOffsetBits))
+  val is_handle = widthMap(w => (exe_htlb_vaddr(w)(xLen-1) && !exe_htlb_vaddr(w)(xLen-2)))
+  val is_ht_infinite = io.core.htSize === 0.U
+  val exe_htlb_passthr = widthMap(w => Mux(htlb_enabled, 
+                                          Mux(will_fire_hella_incoming(w), true.B, !((is_ht_infinite || (!is_ht_infinite && hid(w) < io.core.htSize)) && is_handle(w))), true.B))
+  htlb.io.ht_size := io.core.htSize
+  htlb.io.htlb_enabled := htlb_enabled
+  htlb.io.pht_enabled := ENABLE_PHT.B
 
+  val is_incoming = widthMap(w => will_fire_load_agen_exec(w) || will_fire_load_agen(w) || will_fire_store_agen(w))
   // Create a default invalid IOBundle
   val defaultInvalid = Wire(Valid(new freechips.rocketchip.rocket.SFenceReq))
   defaultInvalid.bits := DontCare
@@ -810,35 +828,45 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
     htlb.io.req(w).valid            := exe_htlb_valid(w)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
-    htlb.io.req(w).bits.passthrough := exe_h_passthr(w)
-    htlb.io.sfence                  := Mux(htlb_enabled, exe_sfence, defaultInvalid)
-    when (htlb.io.req(w).valid && htlb.io.req(w).bits.haddr =/= 0.U && htlb_enabled && !htlb.io.req(w).bits.passthrough) {
-      printf("[LSU] -> [HTLB] %x %d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough)
+    htlb.io.req(w).bits.passthrough := exe_htlb_passthr(w)
+    when (htlb.io.req(w).valid && !exe_htlb_passthr(w) && boomParams.enableHandleTracing.B && is_incoming(w)) {
+        midas.targetutils.SynthesizePrintf(printf("h%x,%d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
     }
   }
+  htlb.io.kill                    := exe_kill.reduce(_||_)
 
-  val exe_htlb_miss  = widthMap(w => Mux(htlb_enabled, htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready), false.B))
 
+  val exe_htlb_miss = widthMap(w => Mux(htlb_enabled, htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready), false.B))
   val exe_tlb_vaddr = widthMap(w => Mux(htlb_enabled, htlb.io.resp(w).addr, exe_htlb_vaddr(w)))
+  val exe_passthr = widthMap(w => will_fire_hella_incoming(w) && hella_req.phys)
 
-  val exe_passthr= widthMap(w =>
-                   Mux(will_fire_hella_incoming(w)  , hella_req.phys,
-                                                      false.B))
-
-  //--------------------------------------------
-  // TLB Access (cntd.)
+  // Increment CPI component times for entries that missed in the HTLB
+  // for (w <- 0 until memWidth) {
+  //   when (will_fire_load_incoming(w) && exe_htlb_miss(w) && !exe_htlb_passthr(w)) {
+  //     ldq(ldq_incoming_idx(w)).bits.cpi_component_times(1) := ldq(ldq_incoming_idx(w)).bits.cpi_component_times(1) + 1.U
+  //   }
+  //   when ((will_fire_stad_incoming(w) || will_fire_sta_incoming(w)) && exe_htlb_miss(w) && !exe_htlb_passthr(w)) {
+  //     stq(stq_incoming_idx(w)).bits.cpi_component_times(1) := stq(stq_incoming_idx(w)).bits.cpi_component_times(1) + 1.U
+  //   }
+  //   when (will_fire_load_retry(w) && exe_htlb_miss(w) && !exe_htlb_passthr(w)) {
+  //     ldq(ldq_retry_idx).bits.cpi_component_times(1) := ldq(ldq_retry_idx).bits.cpi_component_times(1) + 1.U
+  //   }
+  //   when (will_fire_sta_retry(w) && exe_htlb_miss(w) && !exe_htlb_passthr(w)) {
+  //     stq(stq_retry_idx).bits.cpi_component_times(1) := stq(stq_retry_idx).bits.cpi_component_times(1) + 1.U
+  //   }
+  // }
 
   for (w <- 0 until lsuWidth) {
-    dtlb.io.req(w).valid            := exe_tlb_valid(w) && !exe_htlb_miss(w) && !htlb.io.resp(w).phys
+    dtlb.io.req(w).valid            := exe_tlb_valid(w) && !exe_htlb_miss(w)
     dtlb.io.req(w).bits.vaddr       := exe_tlb_vaddr(w)
     dtlb.io.req(w).bits.size        := exe_size(w)
     dtlb.io.req(w).bits.cmd         := exe_cmd(w)
     dtlb.io.req(w).bits.passthrough := exe_passthr(w)
+    dtlb.io.req(w).bits.htlb_passthrough := Mux(!exe_htlb_miss(w), htlb.io.resp(w).phys, false.B)
     dtlb.io.req(w).bits.prv         := io.ptw.status.prv
     dtlb.io.req(w).bits.v           := io.ptw.status.v
-
-    when (dtlb.io.req(w).valid && dtlb.io.req(w).bits.vaddr =/= 0.U && dtlb.io.req(w).bits.passthrough) {
-      printf("[LSU] -> [TLB] %x\n", dtlb.io.req(w).bits.vaddr)
+    when (dtlb.io.req(w).valid && htlb_enabled && false.B) {
+      midas.targetutils.SynthesizePrintf(printf("t%x,%d,%d\n", dtlb.io.req(w).bits.vaddr, dtlb.io.req(w).bits.htlb_passthrough, dtlb.io.req(w).bits.passthrough))
     }
 
     bkptu(w).io.status := io.core.status
@@ -904,24 +932,21 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     xcpt_found = xcpt_found || mem_xcpt_valids(w)
     oldest_xcpt_rob_idx = Mux(is_older, mem_xcpt_uops(w).rob_idx, oldest_xcpt_rob_idx)
   }
-
-  val exe_tlb_miss  = widthMap(w => Mux(htlb.io.resp(w).phys, false.B, exe_htlb_miss(w) || (dtlb.io.req(w).valid && (dtlb.io.resp(w).miss || !dtlb.io.req(w).ready))))
-  val exe_tlb_paddr = widthMap(w => Mux(htlb.io.resp(w).phys, htlb.io.resp(w).addr, Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits),
-                                        exe_tlb_vaddr(w)(corePgIdxBits-1,0))))
+  val was_htlb = RegInit(false.B)
+  when (htlb_enabled && !was_htlb) {
+    was_htlb := htlb_enabled
+  }
+  val exe_tlb_miss  = widthMap(w => exe_tlb_valid(w) && (dtlb.io.resp(w).miss || exe_htlb_miss(w) || !dtlb.io.req(w).ready))
+  val exe_tlb_paddr = widthMap(w => Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits), exe_tlb_vaddr(w)(corePgIdxBits-1,0)))
   val exe_tlb_uncacheable = widthMap(w => !(dtlb.io.resp(w).cacheable))
-
-  val small_handle_criterium = widthMap(w => !exe_h_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).small)
+  val small_handle_criterium = widthMap(w => !exe_htlb_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).try_phys)
 
   for (w <- 0 until lsuWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr, "[lsu] paddrs should match.")
 
-    // debug for printing paddr for small handle optimization
-    // when (!exe_tlb_miss(w) && !exe_h_passthr(w)) {
-    //  printf("exe_tlb_paddr(%d): %x, htlb: %x: \n", w.U, exe_tlb_paddr(w), htlb.io.req(w).bits.haddr)
-    // }
-    htlb.io.tlb(w).valid := !exe_tlb_miss(w) && small_handle_criterium(w) && !exe_passthr(w)
-    htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)
-    htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits)
+    htlb.io.tlb(w).valid := dtlb.io.req(w).valid && !exe_tlb_miss(w) && small_handle_criterium(w)
+    htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)(xLen-2, handleOffsetBits)
+    htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w) - exe_htlb_vaddr(w)(handleBits - 1, 0)
 
     when (mem_xcpt_valids(w))
     {
@@ -1045,10 +1070,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       dmem_req(w).bits.is_hella       := true.B
     }
 
-    when (dmem_req(w).bits.is_hella) {
-      printf("HellaReq: %x %d - cmd:%d\n", dmem_req(w).bits.addr, dmem_req(w).bits.uop.mem_size, dmem_req(w).bits.uop.mem_cmd)
-    }
-
     //-------------------------------------------------------------
     // Write Addr into the LAQ/SAQ
     when (will_fire_load_agen(w) || will_fire_load_agen_exec(w) || will_fire_load_retry(w))
@@ -1158,7 +1179,11 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                              Mux(fired_store_retry(w), mem_stq_retry_e, (0.U).asTypeOf(Valid(new STQEntry)))))
 
 
-  val mem_tlb_miss             = RegNext(exe_tlb_miss)
+  val mem_tlb_miss             = if (ENABLE_PHT > 0) {
+    widthMap(w => RegNext(exe_tlb_miss(w)))
+  } else {
+    widthMap(w => RegNext(exe_tlb_miss(w)) && !fired_hella_incoming(w))
+  }
   val mem_tlb_uncacheable      = RegNext(exe_tlb_uncacheable)
   val mem_paddr                = RegNext(widthMap(w => dmem_req(w).bits.addr))
 

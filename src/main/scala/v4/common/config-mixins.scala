@@ -51,23 +51,7 @@ class WithBoomMemtracePrintf extends Config((site, here, up) => {
   }
 })
 
-class WithBoomHandleSupport extends Config((site, here, up) => {
-  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
-    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
-      enableHandleSupport = 4
-    )))
-    case other => other
-  }
-})
 
-class WithBoomUserLevelHandleSupport extends Config((site, here, up) => {
-  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
-    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
-      enableHandleSupport = 1
-    )))
-    case other => other
-  }
-})
 
 class WithNBoomPerfCounters(n: Int) extends Config((site, here, up) => {
   case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
@@ -106,6 +90,57 @@ class WithRationalBoomTiles extends Config((site, here, up) => {
   }
 })
 
+class WithBoomHandleSupport extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
+      enableHandleSupport = 4
+    )))
+    case other => other
+  }
+})
+
+class WithBoomPHTSupport extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
+      enablePHTSupport = 1
+    )))
+    case other => other
+  }
+})
+
+class WithBoomUserLevelHandleSupport extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
+      enableHandleSupport = 1
+    )))
+    case other => other
+  }
+})
+
+class WithTwoStageHTW extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
+      enableTwoStageHTW = true
+    )))
+  }
+})
+
+class WithHandleTracing extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
+      enableHandleTracing = true
+    )))
+  }
+})
+
+class WithStateTracing extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
+      enableStateTracing = true
+    )))
+  }
+})
+
 
 
 /**
@@ -141,6 +176,56 @@ class WithNSmallBooms(n: Int = 1) extends Config(
               ftq = FtqParameters(nEntries=16),
               nPerfCounters = 2,
               fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
+            ),
+            dcache = Some(
+              DCacheParams(rowBits = 64, nSets=64, nWays=4, nMSHRs=2, nTLBWays=8)
+            ),
+            icache = Some(
+              ICacheParams(rowBits = 64, nSets=64, nWays=4, fetchBytes=2*4)
+            ),
+            tileId = i + idOffset
+          ),
+          crossingParams = RocketCrossingParams()
+        )
+      } ++ prev
+    }
+    case XLen => 64
+    case NumTiles => up(NumTiles) + n
+  })
+)
+
+class WithNSmallYukons(n: Int = 1) extends Config(
+  new WithTAGELBPD ++ // Default to TAGE-L BPD
+  new Config((site, here, up) => {
+    case TilesLocated(InSubsystem) => {
+      val prev = up(TilesLocated(InSubsystem), site)
+      val idOffset = up(NumTiles)
+      (0 until n).map { i =>
+        BoomTileAttachParams(
+          tileParams = BoomTileParams(
+            core = BoomCoreParams(
+              fetchWidth = 4,
+              decodeWidth = 1,
+              numRobEntries = 32,
+              issueParams = Seq(
+                IssueParams(issueWidth=2, numEntries=8, iqType=IQ_MEM, dispatchWidth=1),
+                IssueParams(issueWidth=1, numEntries=8, iqType=IQ_UNQ, dispatchWidth=1),
+                IssueParams(issueWidth=1, numEntries=8, iqType=IQ_ALU, dispatchWidth=1),
+                IssueParams(issueWidth=1, numEntries=8, iqType=IQ_FP , dispatchWidth=1)),
+              numIntPhysRegisters = 52,
+              numFpPhysRegisters = 48,
+              numIrfReadPorts = 3,
+              numFrfReadPorts = 3,
+              numFrfBanks = 1,
+              numLdqEntries = 8,
+              numStqEntries = 8,
+              maxBrCount = 8,
+              numFetchBufferEntries = 8,
+              ftq = FtqParameters(nEntries=16),
+              nPerfCounters = 2,
+              fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
+              nL2HTLBWays = 8,
+              nL2HTLBSets = 64,
             ),
             dcache = Some(
               DCacheParams(rowBits = 64, nSets=64, nWays=4, nMSHRs=2, nTLBWays=8)

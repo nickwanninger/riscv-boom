@@ -120,14 +120,15 @@ case class BoomCoreParams(
   enableBranchPrintf: Boolean = false,
   enableMemtracePrintf: Boolean = false,
 
-  nL1HTLBWays: Int = 1,
-  nL1HTLBEntries: Int = 8,
-  nL2HTLBWays: Int = 1,
-  nL2HTLBEntries: Int = 512,
-
   enableHandleSupport: Int = 0,
-  enablePHTSupport: Int = 0
-
+  enablePHTSupport: Int = 0,
+  nL1HTLBWays: Int = 4,
+  nL1HTLBSets: Int = 4,
+  nL2HTLBWays: Int = 8,
+  nL2HTLBSets: Int = 64,
+  enableTwoStageHTW: Boolean = false,
+  enableHandleTracing: Boolean = false,
+  enableStateTracing: Boolean = false
 // DOC include end: BOOM Parameters
 ) extends freechips.rocketchip.tile.CoreParams
 {
@@ -185,15 +186,32 @@ class BoomCustomCSRs(implicit p: Parameters) extends freechips.rocketchip.tile.C
     Some(CustomCSR(htDumpCSRId,  (BigInt(1) << 64) - 1, Some(BigInt(0x00000000L))))
   }
 
+  override def htInvalCSR = {
+    Some(CustomCSR(htInvalCSRId,  (BigInt(1) << 64) - 1, Some(BigInt(0x00000000L))))
+  }
+
+  override def htSizeCSR = {
+    Some(CustomCSR(htSizeCSRId,  (BigInt(1) << 64) - 1, Some(BigInt(0x00000000L))))
+  }
+
+  override def l2TLBAccessCSR = {
+    Some(CustomCSR(l2TLBAccessCSRId,  (BigInt(1) << 64) - 1, Some(BigInt(0x00000000L))))
+  }
+
+  override def handleTracingCSR = {
+    Some(CustomCSR(handleTracingCSRId,  (BigInt(1) << 64) - 1, Some(BigInt(0x00000000L))))
+  }
+
   val enableOOOCSRId = 0x800
   def enableOOOCSR = Some(CustomCSR(enableOOOCSRId, BigInt(1), Some(BigInt(1))))
 
   val enableBPDCSRId = 0x808
   def enableBPDCSR = Some(CustomCSR(enableBPDCSRId, BigInt(1), Some(BigInt(1))))
 
+
   def marchid = CustomCSR.constant(CSRs.marchid, BigInt(2))
 
-  override def decls = enableOOOCSR.toSeq ++ enableBPDCSR.toSeq ++ bpmCSR.toSeq ++ chickenCSR ++ htBaseCSR ++ htDumpCSR ++ Seq(marchid)
+  override def decls = enableOOOCSR.toSeq ++ enableBPDCSR.toSeq ++ bpmCSR.toSeq ++ chickenCSR ++ htBaseCSR ++ htDumpCSR ++ htInvalCSR ++ htSizeCSR ++ l2TLBAccessCSR ++ handleTracingCSR ++ Seq(marchid)
   def enableOOO = getOrElse(enableOOOCSR, _.value(0), true.B) && !getOrElse(chickenCSR, _.value(3), false.B)
   def enableBPD = getOrElse(enableBPDCSR, _.value(0), true.B)
 }
