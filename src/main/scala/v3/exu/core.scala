@@ -294,6 +294,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   csr.io.customCSRs(2).set := io.htw.htDumped
   csr.io.customCSRs(2).sdata := 0.U
+  csr.io.clear_mie := Mux(csr.io.customCSRs(2).value.orR, ~io.htw.htDumped.orR, false.B)
 
   csr.io.customCSRs(3).set := io.htw.htInvald
   csr.io.customCSRs(3).sdata := 0.U
