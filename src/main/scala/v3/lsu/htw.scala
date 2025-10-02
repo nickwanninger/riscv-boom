@@ -126,7 +126,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
 
     // Handle HTW Responses
     val mem_resp_valid = RegNext(io.mem.resp.valid || Mux(io.requestor.pht_enabled, false.B, io.mem.s2_xcpt.asUInt =/= 0.U))
-    val mem_resp_data = RegNext(io.mem.resp.bits.data)
+    val mem_resp_data = RegNext(io.mem.resp.bits.data) // | (1.U << 62))
     // io.mem.uncached_resp.map { resp =>
     //   assert(!(resp.valid && io.mem.resp.valid))
     //   resp.ready := true.B
@@ -602,10 +602,11 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         resp_valid := mem_resp_valid
         when (mem_resp_valid && boomParams.enableStateTracing.B) {
           midas.targetutils.SynthesizePrintf(printf(
-            "[H2n%x,%x,%d\n",
+            "[H2n%x,%x,%d,%d\n",
             pte.reserved,
             pte.addr,
             pte.try_phys,
+            pte.phys,
           ))
         }
       }
@@ -694,7 +695,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
       val (cache, _) = top_level_cache.get
       val cache_entry = cache(getIndex(hid))
       midas.targetutils.PerfCounter(
-        !(cache_entry.valid && cache_entry.tag === getTag(hid)) && state === s_req, 
+        !(cache_entry.valid && cache_entry.tag === getTag(hid)) && state === s_wait1, 
         "htw_cache_miss", 
         "htw_cache_miss", 
       )

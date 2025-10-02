@@ -391,6 +391,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   tlb.io.req.bits.size  := log2Ceil(coreInstBytes * fetchWidth).U
   tlb.io.req.bits.v     := io.ptw.status.v
   tlb.io.req.bits.prv   := io.ptw.status.prv
+  tlb.io.req.bits.handle := false.B
   tlb.io.sfence         := RegNext(io.cpu.sfence)
   tlb.io.kill           := false.B
 

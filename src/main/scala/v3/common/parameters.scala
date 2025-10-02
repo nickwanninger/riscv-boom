@@ -113,6 +113,7 @@ case class BoomCoreParams(
   enableHandleTracing: Boolean = false,
   enableStateTracing: Boolean = false,
   HTWCacheSize: Int = 4,
+  enableHTLBPhysAddr: Boolean = false,
 // DOC include end: BOOM Parameters
 ) extends freechips.rocketchip.tile.CoreParams
 {

@@ -186,7 +186,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   }
 
   // More Utilities
-  val paddr_opt_enabled = io.htBase(xLen-1)
+  val paddr_opt_enabled = boomParams.enableHTLBPhysAddr.B
   val addr = widthMap(w =>
     entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).addr)
   val phys = widthMap(w =>
@@ -216,14 +216,23 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
     // midas.targetutils.PerfCounter(do_refill && io.req(0).bits.passthrough, "l1_htlb_unnecessary_miss", "L1 HTLB Unnecessary Miss")
 
-    // you will try phys or have phys, check if you cross pages
-    when (hm_enabled(w) && (htlb_hit(w) && (try_phys(w) || phys(w)))) {
-      when ((addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0))(vaddrBits-1, pgIdxBits) =/= addr(w)(vaddrBits-1, pgIdxBits)) {
-        // midas.targetutils.SynthesizePrintf(printf("[Ht%d,%x,%x\n", hid(w), addr(w), io.req(w).bits.haddr(handleOffsetBits - 1, 0)))
-        // midas.targetutils.SynthesizePrintf(printf("[HTLB] object %d at vaddr %x accessed at offset %x crossed page boundaries\n", hid(w), addr(w), io.req(w).bits.haddr(handleOffsetBits - 1, 0)))
-        cross_pages := true.B
-        entries(hid_set(w))(OHToUInt(real_hits(w))).inval_try_phys()
-      }
+    val could_return_phys = hm_enabled(w) && (htlb_hit(w) && (try_phys(w) || phys(w)))
+    val addr_crossed_pages = (addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0))(vaddrBits-1, pgIdxBits) =/= addr(w)(vaddrBits-1, pgIdxBits)
+
+    cross_pages := could_return_phys && addr_crossed_pages
+    when (could_return_phys && addr_crossed_pages) {
+      // midas.targetutils.SynthesizePrintf(printf("[Ht%d,%x,%x\n", hid(w), addr(w), io.req(w).bits.haddr(handleOffsetBits - 1, 0)))
+      // midas.targetutils.SynthesizePrintf(printf("[HTLB] object %d at vaddr %x accessed at offset %x crossed page boundaries\n", hid(w), addr(w), io.req(w).bits.haddr(handleOffsetBits - 1, 0)))
+      entries(hid_set(w))(OHToUInt(real_hits(w))).inval_try_phys()
+    }
+
+    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && htlb_hit(w) && phys(w) && addr_crossed_pages, "l1_htlb_hit_on_invald_phys", "L1 HTLB Hit On Invald Phys")
+    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && io.resp(w).phys, "l1_htlb_hit_on_phys", "L1 HTLB Hit On Phys")
+    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && io.resp(w).try_phys, "l1_htlb_hit_on_try_phys", "L1 HTLB Hit On Try Phys")
+    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && !io.resp(w).try_phys && !io.resp(w).phys, "l1_htlb_hit_on_no_phy_no_try", "L1 HTLB Hit On No Phys No Try")
+
+    when (boomParams.enableStateTracing.B && htlb_hit(w)) {
+      midas.targetutils.SynthesizePrintf(printf("Hdebug:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).try_phys, entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).phys, paddr_opt_enabled, try_phys(w), hm_enabled(w), htlb_hit(w), could_return_phys, addr_crossed_pages, cross_pages, io.htBase, io.htBase(xLen-1), xLen.U))
     }
 
     when(!io.resp(w).miss && io.req(w).valid && hm_enabled(w) && boomParams.enableStateTracing.B) {
@@ -267,8 +276,9 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
     when (boomParams.enableStateTracing.B) {
       midas.targetutils.SynthesizePrintf(printf(
-        "Hn%x,%d,%d\n",
+        "Hn%x,%d,%d,%d\n",
         newEntry.addr,
+        newEntry.try_phys,
         newEntry.phys,
         hid_req,
       ))
