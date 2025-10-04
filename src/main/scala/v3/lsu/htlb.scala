@@ -213,6 +213,13 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
                                addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0), 0.U))
     io.resp(w).phys := Mux(hm_enabled(w) && htlb_hit(w), phys(w), false.B)
     io.resp(w).try_phys := Mux(hm_enabled(w) && htlb_hit(w), try_phys(w) && !cross_pages, false.B)
+    midas.targetutils.PerfCounter(hm_enabled(w) && io.resp(w).try_phys, "l1_htlb_tried_phys", "l1_htlb_tried_phys")
+    midas.targetutils.PerfCounter(hm_enabled(w) && io.resp(w).phys, "l1_htlb_returned_phys", "l1_htlb_returned_phys")
+
+    when (boomParams.enableStateTracing.B && htlb_hit(w)) {
+      printf("[HTLB] hm_enabled: %d, htlb_hit: %d, try_phys: %d, phys: %d, addr: %x, hid: %x, cross_pages: %d\n", hm_enabled(w), htlb_hit(w), try_phys(w), phys(w), addr(w), hid(w), cross_pages)
+    }
+    
 
     // midas.targetutils.PerfCounter(do_refill && io.req(0).bits.passthrough, "l1_htlb_unnecessary_miss", "L1 HTLB Unnecessary Miss")
 
@@ -226,10 +233,10 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       entries(hid_set(w))(OHToUInt(real_hits(w))).inval_try_phys()
     }
 
-    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && htlb_hit(w) && phys(w) && addr_crossed_pages, "l1_htlb_hit_on_invald_phys", "L1 HTLB Hit On Invald Phys")
-    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && io.resp(w).phys, "l1_htlb_hit_on_phys", "L1 HTLB Hit On Phys")
-    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && io.resp(w).try_phys, "l1_htlb_hit_on_try_phys", "L1 HTLB Hit On Try Phys")
-    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && !io.resp(w).try_phys && !io.resp(w).phys, "l1_htlb_hit_on_no_phy_no_try", "L1 HTLB Hit On No Phys No Try")
+    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && htlb_hit(w) && phys(w) && addr_crossed_pages, "l1_htlb_hit_on_invald_phys", "l1_htlb_hit_on_invald_phys")
+    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && io.resp(w).phys, "l1_htlb_hit_on_phys", "l1_htlb_hit_on_phys")
+    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && io.resp(w).try_phys, "l1_htlb_hit_on_try_phys", "l1_htlb_hit_on_try_phys")
+    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && !io.resp(w).try_phys && !io.resp(w).phys, "l1_htlb_hit_on_no_phy_no_try", "l1_htlb_hit_on_no_phy_no_try")
 
     when (boomParams.enableStateTracing.B && htlb_hit(w)) {
       midas.targetutils.SynthesizePrintf(printf("Hdebug:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).try_phys, entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).phys, paddr_opt_enabled, try_phys(w), hm_enabled(w), htlb_hit(w), could_return_phys, addr_crossed_pages, cross_pages, io.htBase, io.htBase(xLen-1), xLen.U))
@@ -261,9 +268,11 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       val hitVecPAddr = entries(paddr_hid_set).map(_.hit(paddr_hid_tag))
       // midas.targetutils.SynthesizePrintf(printf("[HTLB] paddr_hid_tag: %x, paddr_hid_set: %x, way: %d, setting hid %x to paddr %x\n", paddr_hid_tag, paddr_hid_set, OHToUInt(hitVecPAddr), io.tlb(w).bits.hid, io.tlb(w).bits.paddr))
       // midas.targetutils.SynthesizePrintf(printf("[Hpi%x,%x,%d,%x,%x\n", paddr_hid_tag, paddr_hid_set, OHToUInt(hitVecPAddr), io.tlb(w).bits.hid, io.tlb(w).bits.paddr))
+      midas.targetutils.SynthesizePrintf(printf("Ht:%d,%x\n", io.tlb(w).bits.hid, io.tlb(w).bits.paddr))
       entries(paddr_hid_set)(OHToUInt(hitVecPAddr)).set_paddr(io.tlb(w).bits.paddr)
     }
   }
+  midas.targetutils.PerfCounter(io.tlb.map(_.valid).asUInt.orR, "l1_paddr_recvd", "l1_paddr_recvd")
 
 
   val have_victim = RegInit(false.B)
@@ -367,7 +376,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   // midas.targetutils.SynthesizePrintf(printf("set_idx: %d, ways_dumped: %d\n", set_idx, ways_dumped))
 
   io.htw.l1miss := do_refill || htlb_miss.orR
-  midas.targetutils.PerfCounter(htlb_miss.orR, "l1_htlb_miss", "l1_htlb_miss")
+  midas.targetutils.PerfCounter(io.resp(0).miss, "l1_htlb_miss", "l1_htlb_miss")
   when(io.htw.l1miss) {
     printf("[HTLB] L1 Miss\n")
   }

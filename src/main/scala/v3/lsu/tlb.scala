@@ -23,6 +23,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
     val sfence = Input(Valid(new SFenceReq))
     val ptw = new TLBPTWIO
     val kill = Input(Bool())
+    val htlb_enabled = Input(Bool())
   })
   io.ptw := DontCare
   io.resp := DontCare
@@ -172,7 +173,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   val superpage_hits = widthMap(w => VecInit(superpage_entries.map(_.hit(vpn(w)))))
   val hitsVec = widthMap(w => VecInit(all_entries.map(vm_enabled(w) && _.hit(vpn(w)))))
   val real_hits = widthMap(w => hitsVec(w).asUInt)
-  val hits = widthMap(w => Cat(!vm_enabled(w), real_hits(w)))
+  val hits = widthMap(w => Mux(vm_enabled(w), Cat(!vm_enabled(w), real_hits(w)), 0.U))
   val ppn = widthMap(w => Mux1H(hitsVec(w) :+ !vm_enabled(w), all_entries.map(_.ppn(vpn(w))) :+ vpn(w)(ppnBits-1, 0)))
 
     // permission bit arrays
@@ -272,7 +273,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
 
   val tlb_hit = widthMap(w => real_hits(w).orR)
   val tlb_miss = widthMap(w => vm_enabled(w) && !bad_va(w) && !tlb_hit(w))
-  midas.targetutils.PerfCounter(tlb_miss.orR, "l1_tlb_miss", "l1_tlb_miss")
+  midas.targetutils.PerfCounter(io.resp(0).miss, "l1_tlb_miss", "l1_tlb_miss")
 
   val sectored_plru = new PseudoLRU(sectored_entries.size)
   val superpage_plru = new PseudoLRU(superpage_entries.size)
@@ -294,6 +295,15 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
 
   io.miss_rdy := state === s_ready
   for (w <- 0 until memWidth) {
+    when (tlb_hit(w) && vm_enabled(w) && io.htlb_enabled && io.req(w).bits.vaddr =/= 0.U && io.resp(w).paddr =/= 0.U) {
+      midas.targetutils.SynthesizePrintf(printf("T%x,%x,%d,%d,%d\n", io.req(w).bits.vaddr, io.resp(w).paddr, io.req(w).bits.handle, io.req(w).bits.passthrough, io.req(w).bits.htlb_passthrough))
+    }
+    when (tlb_hit(w) && io.htlb_enabled && io.req(w).bits.vaddr =/= 0.U) {
+      midas.targetutils.SynthesizePrintf(printf("Tdebug:%d,%x\n", vm_enabled(w), io.resp(w).paddr))
+    }
+    when (io.resp(w).ae.ld && io.htlb_enabled) {
+      midas.targetutils.SynthesizePrintf(printf("Tael:%b,%b,%b (%b,%b) -> %b\n", ae_valid_array(w), ae_ld_array(w), hits(w), io.resp(w).ae.ld, ae_array(w), pr_array(w)))
+    }
     io.req(w).ready    := true.B
     io.resp(w).pf.ld   := (bad_va(w) && cmd_read(w)) || (pf_ld_array(w) & hits(w)).orR
     io.resp(w).pf.st   := (bad_va(w) && cmd_write_perms(w)) || (pf_st_array(w) & hits(w)).orR
@@ -316,6 +326,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   io.ptw.req.valid := state === s_request
   io.ptw.req.bits.valid := !io.kill
   io.ptw.req.bits.bits.addr := r_refill_tag
+  io.ptw.req.bits.bits.handle := io.req(0).bits.handle
 
   if (usingVM) {
     val sfence = io.sfence.valid
@@ -362,5 +373,5 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
     Mux(valids.andR, alt, PriorityEncoder(~valids))
   }
 
-
+  midas.targetutils.PerfCounter(io.resp(0).miss && io.req(0).bits.handle, "l1_tlb_miss_from_handle_translation", "l1_tlb_miss_from_handle_translation")
 }

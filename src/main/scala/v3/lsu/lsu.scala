@@ -575,7 +575,26 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   // Can we fire a hellacache request that the dcache nack'd
   val can_fire_hella_wakeup    = WireInit(widthMap(w => false.B)) // This is assigned to in the hellashim controller
 
-  
+  midas.targetutils.PerfCounter(
+    !(can_fire_load_incoming.reduce(_||_) || can_fire_stad_incoming.reduce(_||_) || can_fire_sta_incoming.reduce(_||_) ||
+      can_fire_std_incoming.reduce(_||_) || can_fire_sfence.reduce(_||_) || can_fire_release.reduce(_||_) ||
+      can_fire_load_retry.reduce(_||_) || can_fire_sta_retry.reduce(_||_) || can_fire_store_commit.reduce(_||_) ||
+      can_fire_load_wakeup.reduce(_||_) || can_fire_hella_incoming.reduce(_||_) || can_fire_hella_wakeup.reduce(_||_)),
+    "lsu_cant_fire", "lsu_cant_fire")
+
+  midas.targetutils.PerfCounter(can_fire_load_incoming.reduce(_||_), "lsu_can_fire_load_incoming", "lsu_can_fire_load_incoming")
+  midas.targetutils.PerfCounter(can_fire_stad_incoming.reduce(_||_), "lsu_can_fire_stad_incoming", "lsu_can_fire_stad_incoming")
+  midas.targetutils.PerfCounter(can_fire_sta_incoming.reduce(_||_), "lsu_can_fire_sta_incoming", "lsu_can_fire_sta_incoming")
+  midas.targetutils.PerfCounter(can_fire_std_incoming.reduce(_||_), "lsu_can_fire_std_incoming", "lsu_can_fire_std_incoming")
+  midas.targetutils.PerfCounter(can_fire_sfence.reduce(_||_), "lsu_can_fire_sfence", "lsu_can_fire_sfence")
+  midas.targetutils.PerfCounter(can_fire_release.reduce(_||_), "lsu_can_fire_release", "lsu_can_fire_release")
+  midas.targetutils.PerfCounter(can_fire_load_retry.reduce(_||_), "lsu_can_fire_load_retry", "lsu_can_fire_load_retry")
+  midas.targetutils.PerfCounter(can_fire_sta_retry.reduce(_||_), "lsu_can_fire_sta_retry", "lsu_can_fire_sta_retry")
+  midas.targetutils.PerfCounter(can_fire_store_commit.reduce(_||_), "lsu_can_fire_store_commit", "lsu_can_fire_store_commit")
+  midas.targetutils.PerfCounter(can_fire_load_wakeup.reduce(_||_), "lsu_can_fire_load_wakeup", "lsu_can_fire_load_wakeup")
+  midas.targetutils.PerfCounter(can_fire_hella_incoming.reduce(_||_), "lsu_can_fire_hella_incoming", "lsu_can_fire_hella_incoming")
+  midas.targetutils.PerfCounter(can_fire_hella_wakeup.reduce(_||_), "lsu_can_fire_hella_wakeup", "lsu_can_fire_hella_wakeup")
+
   // can't fire anything? debug print all cases
   when (htlb_enabled && false.B) {
     when (!(can_fire_load_incoming.reduce(_||_) || can_fire_stad_incoming.reduce(_||_) || can_fire_sta_incoming.reduce(_||_) ||
@@ -768,6 +787,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val is_incoming = widthMap(w => will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w))
 
   for (w <- 0 until memWidth) {
+    midas.targetutils.PerfCounter(exe_htlb_valid(w) && !exe_htlb_passthr(w), "l1_htlb_accesses_non_passthrough", "l1_htlb_accesses_non_passthrough")
+    midas.targetutils.PerfCounter(exe_htlb_valid(w) && exe_htlb_passthr(w), "l1_htlb_accesses_passthrough", "l1_htlb_accesses_passthrough")
+    midas.targetutils.PerfCounter(exe_htlb_valid(w), "l1_htlb_accesses", "l1_htlb_accesses")
     htlb.io.req(w).valid            := exe_htlb_valid(w)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_htlb_passthr(w)
@@ -797,7 +819,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     dtlb.io.req(w).bits.handle      := exe_is_handle(w)
 
     when (dtlb.io.req(w).valid && htlb_enabled && boomParams.enableStateTracing.B) {
-      midas.targetutils.SynthesizePrintf(printf("t%x,%d,%d\n", dtlb.io.req(w).bits.vaddr, dtlb.io.req(w).bits.htlb_passthrough, dtlb.io.req(w).bits.passthrough))
+      midas.targetutils.SynthesizePrintf(printf("t(%d%d)%x,%d,%d,%d\n", isRead(exe_cmd(w)), isWrite(exe_cmd(w)), dtlb.io.req(w).bits.vaddr, dtlb.io.req(w).bits.htlb_passthrough, dtlb.io.req(w).bits.passthrough, dtlb.io.req(w).bits.handle))
     }
   }
   dtlb.io.kill                      := exe_kill.reduce(_||_)
@@ -811,6 +833,15 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val ae_ld = widthMap(w => dtlb.io.req(w).valid && dtlb.io.resp(w).ae.ld && exe_tlb_uop(w).uses_ldq)
   val ae_st = widthMap(w => dtlb.io.req(w).valid && dtlb.io.resp(w).ae.st && exe_tlb_uop(w).uses_stq)
 
+  when (htlb_enabled && is_handle.reduce(_||_) && dtlb.io.req(0).valid) {
+    midas.targetutils.SynthesizePrintf(printf("xcpt:%d,%d,%d,%d,%d,%d\n", pf_ld.reduce(_||_), pf_st.reduce(_||_), ae_ld.reduce(_||_), ae_st.reduce(_||_), ma_ld.reduce(_||_), ma_st.reduce(_||_)))
+  }
+
+  midas.targetutils.PerfCounter(dtlb.io.req(0).valid, "l1_dtlb_accesses", "l1_dtlb_accesses")
+  midas.targetutils.PerfCounter(dtlb.io.req(0).valid && dtlb.io.req(0).bits.passthrough && !dtlb.io.req(0).bits.htlb_passthrough, "l1_dtlb_dtlb_passthrough", "l1_dtlb_dtlb_passthrough")
+  midas.targetutils.PerfCounter(dtlb.io.req(0).valid && !dtlb.io.req(0).bits.passthrough && dtlb.io.req(0).bits.htlb_passthrough, "l1_dtlb_htlb_passthrough", "l1_dtlb_htlb_passthrough")
+  midas.targetutils.PerfCounter((will_fire_load_retry(0) || will_fire_sta_retry(0)) && dtlb.io.req(0).valid, "l1_dtlb_retries", "l1_dtlb_retries")
+  midas.targetutils.PerfCounter((will_fire_load_incoming(0) || will_fire_sta_incoming(0) || will_fire_stad_incoming(0) || will_fire_std_incoming(0)) && dtlb.io.req(0).valid, "l1_dtlb_incoming", "l1_dtlb_incoming")
 
   // TODO check for xcpt_if and verify that never happens on non-speculative instructions.
   val mem_xcpt_valids = RegNext(widthMap(w =>
