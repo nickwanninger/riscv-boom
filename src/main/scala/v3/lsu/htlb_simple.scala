@@ -130,7 +130,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p
   // ------------------------------------------------------------------------------------------------
   // ------------------------------------------------------------------------------------------------
 
-  val s_ready :: s_req_l0 :: s_check_l0 :: s_req_outer :: s_wait_outer :: s_req_inner :: s_wait_inner :: s_refill :: Nil = Enum(8)
+  val s_ready :: s_req_l0 :: s_check_l0 :: s_req_outer :: s_wait_outer :: s_req_inner :: s_wait_inner :: Nil = Enum(7)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
 
@@ -312,10 +312,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p
        } .elsewhen(io.mem.s2_nack) {
          next_state := s_req_inner
        }
-    }
-    is (s_refill) {
-       // Unused now
-       next_state := s_ready
     }
   }
 
