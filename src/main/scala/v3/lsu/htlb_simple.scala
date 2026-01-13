@@ -85,6 +85,54 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p
     }
   }
 
+  class HandleTraceQueue(width: Int, log2Depth: Int)(implicit p: Parameters) extends BoomModule()(p) {
+    val io = IO(new Bundle {
+      val enq = Flipped(Decoupled(UInt(width.W)))
+    })
+
+    val depth = 1 << log2Depth
+    val queue = Reg(Vec(depth, UInt(width.W)))
+    val head = RegInit(0.U(log2Depth.W))
+    val tail = RegInit(0.U(log2Depth.W))
+    val count = RegInit(0.U((log2Depth + 1).W))
+
+    val full = count === depth.U
+    io.enq.ready := true.B
+
+    when(io.enq.valid) {
+      queue(tail) := io.enq.bits
+      tail := tail + 1.U
+      
+      when (full) {
+        head := head + 1.U
+      } .otherwise {
+        count := count + 1.U
+      }
+      
+      if (boomParams.enableStateTracing) {
+         val start_offset = Mux(full, 1.U, 0.U)
+         val num_old_items = Mux(full, (depth - 1).U, count)
+         
+         // Using simpler masking for circular access
+         val mask = (depth - 1).U
+
+         midas.targetutils.SynthesizePrintf(printf("[H Queue] %d/%d: ", head, tail))
+         
+         for (i <- 0 until depth) {
+             // Access with mask to handle wrap
+             val idx = (head + start_offset + i.U) & mask
+
+             when (i.U < num_old_items) {
+                 midas.targetutils.SynthesizePrintf(printf("%x ", queue(idx)))
+             } .elsewhen (i.U === num_old_items) {
+                 midas.targetutils.SynthesizePrintf(printf("%x ", io.enq.bits))
+             }
+         }
+         midas.targetutils.SynthesizePrintf(printf("\n"))
+      }
+    }
+  }
+
   // ------------------------------------------------------------------------------------------------
   // ------------------------------------------------------------------------------------------------
   // L1 HTLB Logic
@@ -100,6 +148,9 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p
   val entries = Reg(Vec(cfg.nSets, Vec(cfg.nWays, new Entry(cfg.nSets))))
 
   val l1_plru = new SetAssocLRU(cfg.nSets, cfg.nWays, "plru")
+  val trace_queue = Module(new HandleTraceQueue(handleBits, 4))
+  trace_queue.io.enq.valid := false.B
+  trace_queue.io.enq.bits := 0.U
 
   // Hit Logic
   val hid_tag = Split(hid, idxBits)._1
@@ -306,6 +357,9 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p
           if (boomParams.enableStateTracing) {
               midas.targetutils.SynthesizePrintf(printf("[H%d|Refill] HID: %x, Addr: %x, Phys: %b, Raw: %x\n", state, hid_req, newEntry.addr, newEntry.phys, mem_resp_data))
           }
+          
+          trace_queue.io.enq.valid := true.B
+          trace_queue.io.enq.bits := hid_req
           
           next_state := s_ready
 
