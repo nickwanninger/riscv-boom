@@ -592,6 +592,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
         //   hid(entries_per_ht_bits-1, 0)
         // ))
       }
+      // intermediate state between s_req2 and s_wait5 for a cycle delay
       is (s_wait4) {
         next_state := s_wait5 
       }
@@ -705,6 +706,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     // Prepare Memory Request
     io.mem.keep_clock_enabled := false.B
 
+    // these lines need to be moved to L1 HTLB
     io.mem.req.valid := state === s_req  || state === s_dump_req || state === s_req2
     io.mem.req.bits.phys := io.requestor.pht_enabled
     io.mem.req.bits.cmd := Mux(state === s_dump_req, M_XWR, M_XRD)
@@ -722,6 +724,7 @@ class HTW(implicit p: Parameters) extends BoomModule()(p) {
     io.mem.req.bits.mask := DontCare
 
     // TODO: This may need to change if we get an exception in the middle of a handle table walk
+    // without an L2, this kill logic will go away.
     io.mem.s1_kill := l2_hit || (state =/= s_wait1 && state =/= s_dump_wait && state =/= s_wait4)
     io.mem.s1_data.data := Mux(state === s_dump_wait, hid_to_dump, 0.U)
     io.mem.s1_data.mask := Mux(state === s_dump_wait, ((1 << coreDataBytes) - 1).U, 0.U)

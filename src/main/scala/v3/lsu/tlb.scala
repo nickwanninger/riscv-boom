@@ -131,6 +131,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   val s_ready :: s_request :: s_wait :: s_wait_invalidate :: Nil = Enum(4)
   val state = RegInit(s_ready)
   val r_refill_tag = Reg(UInt(vpnBits.W))
+  val r_refill_handle = Reg(Bool())
   val r_superpage_repl_addr = Reg(UInt(log2Ceil(superpage_entries.size).W))
   val r_sectored_repl_addr = Reg(UInt(log2Ceil(sectored_entries.size).W))
   val r_sectored_hit_addr = Reg(UInt(log2Ceil(sectored_entries.size).W))
@@ -273,7 +274,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
 
   val tlb_hit = widthMap(w => real_hits(w).orR)
   val tlb_miss = widthMap(w => vm_enabled(w) && !bad_va(w) && !tlb_hit(w))
-  midas.targetutils.PerfCounter(io.resp(0).miss, "l1_tlb_miss", "l1_tlb_miss")
+  midas.targetutils.PerfCounter(widthMap(w => io.resp(w).miss).reduce(_ || _), "l1_tlb_miss", "l1_tlb_miss")
 
   val sectored_plru = new PseudoLRU(sectored_entries.size)
   val superpage_plru = new PseudoLRU(superpage_entries.size)
@@ -291,7 +292,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   // a miss on duplicate entries.
   val multipleHits = widthMap(w => PopCountAtLeast(real_hits(w), 2))
 
-  midas.targetutils.PerfCounter(do_refill && io.req(0).bits.passthrough, "l1_tlb_unnecessary_miss", "l1_tlb_unmiss")
+  midas.targetutils.PerfCounter(do_refill && widthMap(w => io.req(w).bits.passthrough).reduce(_ || _), "l1_tlb_unnecessary_miss", "l1_tlb_unmiss")
 
   io.miss_rdy := state === s_ready
   for (w <- 0 until memWidth) {
@@ -326,7 +327,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   io.ptw.req.valid := state === s_request
   io.ptw.req.bits.valid := !io.kill
   io.ptw.req.bits.bits.addr := r_refill_tag
-  io.ptw.req.bits.bits.handle := io.req(0).bits.handle
+  io.ptw.req.bits.bits.handle := r_refill_handle
 
   if (usingVM) {
     val sfence = io.sfence.valid
@@ -334,6 +335,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
       when (io.req(w).fire && tlb_miss(w) && state === s_ready) {
         state := s_request
         r_refill_tag := vpn(w)
+        r_refill_handle := io.req(w).bits.handle
 
         r_superpage_repl_addr := replacementEntry(superpage_entries, superpage_plru.way)
         r_sectored_repl_addr  := replacementEntry(sectored_entries, sectored_plru.way)
@@ -373,5 +375,5 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
     Mux(valids.andR, alt, PriorityEncoder(~valids))
   }
 
-  midas.targetutils.PerfCounter(io.resp(0).miss && io.req(0).bits.handle, "l1_tlb_miss_from_handle_translation", "l1_tlb_miss_from_handle_translation")
+  midas.targetutils.PerfCounter(widthMap(w => io.resp(w).miss && io.req(w).bits.handle).reduce(_ || _), "l1_tlb_miss_from_handle_translation", "l1_tlb_miss_from_handle_translation")
 }

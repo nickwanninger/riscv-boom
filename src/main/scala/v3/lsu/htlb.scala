@@ -194,6 +194,8 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   val try_phys = widthMap(w =>
     entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).try_phys && !entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).phys && paddr_opt_enabled)
 
+
+  val addr_crossed_pages = widthMap(w => (addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0))(vaddrBits-1, pgIdxBits) =/= addr(w)(vaddrBits-1, pgIdxBits))
   // Send response to LSU
   io.miss_rdy := state === s_ready
   for (w <- 0 until memWidth) {
@@ -213,8 +215,6 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
                                addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0), 0.U))
     io.resp(w).phys := Mux(hm_enabled(w) && htlb_hit(w), phys(w), false.B)
     io.resp(w).try_phys := Mux(hm_enabled(w) && htlb_hit(w), try_phys(w) && !cross_pages, false.B)
-    midas.targetutils.PerfCounter(hm_enabled(w) && io.resp(w).try_phys, "l1_htlb_tried_phys", "l1_htlb_tried_phys")
-    midas.targetutils.PerfCounter(hm_enabled(w) && io.resp(w).phys, "l1_htlb_returned_phys", "l1_htlb_returned_phys")
 
     when (boomParams.enableStateTracing.B && htlb_hit(w)) {
       printf("[HTLB] hm_enabled: %d, htlb_hit: %d, try_phys: %d, phys: %d, addr: %x, hid: %x, cross_pages: %d\n", hm_enabled(w), htlb_hit(w), try_phys(w), phys(w), addr(w), hid(w), cross_pages)
@@ -224,22 +224,17 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
     // midas.targetutils.PerfCounter(do_refill && io.req(0).bits.passthrough, "l1_htlb_unnecessary_miss", "L1 HTLB Unnecessary Miss")
 
     val could_return_phys = hm_enabled(w) && (htlb_hit(w) && (try_phys(w) || phys(w)))
-    val addr_crossed_pages = (addr(w) + io.req(w).bits.haddr(handleOffsetBits - 1, 0))(vaddrBits-1, pgIdxBits) =/= addr(w)(vaddrBits-1, pgIdxBits)
 
-    cross_pages := could_return_phys && addr_crossed_pages
-    when (could_return_phys && addr_crossed_pages) {
+    cross_pages := could_return_phys && addr_crossed_pages(w)
+    when (could_return_phys && addr_crossed_pages(w)) {
       // midas.targetutils.SynthesizePrintf(printf("[Ht%d,%x,%x\n", hid(w), addr(w), io.req(w).bits.haddr(handleOffsetBits - 1, 0)))
       // midas.targetutils.SynthesizePrintf(printf("[HTLB] object %d at vaddr %x accessed at offset %x crossed page boundaries\n", hid(w), addr(w), io.req(w).bits.haddr(handleOffsetBits - 1, 0)))
       entries(hid_set(w))(OHToUInt(real_hits(w))).inval_try_phys()
     }
 
-    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && htlb_hit(w) && phys(w) && addr_crossed_pages, "l1_htlb_hit_on_invald_phys", "l1_htlb_hit_on_invald_phys")
-    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && io.resp(w).phys, "l1_htlb_hit_on_phys", "l1_htlb_hit_on_phys")
-    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && io.resp(w).try_phys, "l1_htlb_hit_on_try_phys", "l1_htlb_hit_on_try_phys")
-    midas.targetutils.PerfCounter(hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && !io.resp(w).try_phys && !io.resp(w).phys, "l1_htlb_hit_on_no_phy_no_try", "l1_htlb_hit_on_no_phy_no_try")
-
+    
     when (boomParams.enableStateTracing.B && htlb_hit(w)) {
-      midas.targetutils.SynthesizePrintf(printf("Hdebug:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).try_phys, entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).phys, paddr_opt_enabled, try_phys(w), hm_enabled(w), htlb_hit(w), could_return_phys, addr_crossed_pages, cross_pages, io.htBase, io.htBase(xLen-1), xLen.U))
+      midas.targetutils.SynthesizePrintf(printf("Hdebug:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).try_phys, entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData).phys, paddr_opt_enabled, try_phys(w), hm_enabled(w), htlb_hit(w), could_return_phys, addr_crossed_pages(w), cross_pages, io.htBase, io.htBase(xLen-1), xLen.U))
     }
 
     when(!io.resp(w).miss && io.req(w).valid && hm_enabled(w) && boomParams.enableStateTracing.B) {
@@ -252,6 +247,14 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       ))
     }
   }
+
+  midas.targetutils.PerfCounter(widthMap(w => hm_enabled(w) && io.resp(w).try_phys).reduce(_ || _), "l1_htlb_tried_phys", "l1_htlb_tried_phys")
+  midas.targetutils.PerfCounter(widthMap(w => hm_enabled(w) && io.resp(w).phys).reduce(_ || _), "l1_htlb_returned_phys", "l1_htlb_returned_phys")
+
+  midas.targetutils.PerfCounter(widthMap(w => hm_enabled(w) && paddr_opt_enabled && htlb_hit(w) && phys(w) && addr_crossed_pages(w)).reduce(_ || _), "l1_htlb_hit_on_invald_phys", "l1_htlb_hit_on_invald_phys")
+  midas.targetutils.PerfCounter(widthMap(w => hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && io.resp(w).phys).reduce(_ || _), "l1_htlb_hit_on_phys", "l1_htlb_hit_on_phys")
+  midas.targetutils.PerfCounter(widthMap(w => hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && io.resp(w).try_phys).reduce(_ || _), "l1_htlb_hit_on_try_phys", "l1_htlb_hit_on_try_phys")
+  midas.targetutils.PerfCounter(widthMap(w => hm_enabled(w) && paddr_opt_enabled && !io.resp(w).miss && !io.resp(w).try_phys && !io.resp(w).phys).reduce(_ || _), "l1_htlb_hit_on_no_phy_no_try", "l1_htlb_hit_on_no_phy_no_try")
 
   for (w <- 0 until memWidth) {
     when(io.req(w).fire && htlb_miss(w) && state === s_ready &&
@@ -277,6 +280,8 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   val have_victim = RegInit(false.B)
   // Refill L1 HTLB once L2 HTLB responds
+  // This can go away without an L2, because we don't need to put our victim anywhere when we refill
+  // TODO: this should spit the data out into some dump queue or something though.
   when(do_refill) {
     val newEntry = Wire(new HTLBEntryData)
     newEntry.phys := io.htw.resp.bits.hte.phys
@@ -376,7 +381,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   // midas.targetutils.SynthesizePrintf(printf("set_idx: %d, ways_dumped: %d\n", set_idx, ways_dumped))
 
   io.htw.l1miss := do_refill || htlb_miss.orR
-  midas.targetutils.PerfCounter(io.resp(0).miss, "l1_htlb_miss", "l1_htlb_miss")
+  midas.targetutils.PerfCounter(widthMap(w => io.resp(w).miss).reduce(_ || _), "l1_htlb_miss", "l1_htlb_miss")
   when(io.htw.l1miss) {
     printf("[HTLB] L1 Miss\n")
   }
@@ -384,6 +389,7 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
   // val hte_dst_addr = io.htDump + (dumped_entry_idx / 2.U) *4.U
   val hte_dst_addr = io.htDump + dumped_entry_idx*4.U
 
+  // This currently only writes because of dumping. It needs to read for htw walks.
   io.mem.keep_clock_enabled := false.B
   io.mem.req.valid := state === s_dump_req
   io.mem.req.bits.phys := io.pht_enabled
@@ -408,7 +414,9 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
 
   switch (state) {
     is (s_ready) {
-      next_state := Mux(io.htDump.orR, s_dump, Mux(have_victim, s_victim_req, Mux(io.req(0).fire && htlb_miss(0), s_request, s_ready)))
+      for (w <- 0 until memWidth) {
+        next_state := Mux(io.htDump.orR, s_dump, Mux(have_victim, s_victim_req, Mux(io.req(w).fire && htlb_miss(w), s_request, s_ready)))
+      }
 
       when (next_state === s_dump) {
         if (boomParams.enableStateTracing) {
@@ -418,12 +426,14 @@ class HTLB(cfg: HTLBConfig)(implicit p: Parameters) extends BoomModule()(p) {
       }
     }
     is (s_request) {
+      // if the request to l2 has been accepted, go to s_wait, otherwise loop
       next_state := Mux(io.htw.req.fire, s_wait, s_request)
       when(io.htw.req.fire && boomParams.enableStateTracing.B) {
         midas.targetutils.SynthesizePrintf(printf("[Hl%x\n", io.htw.req.bits.bits.hid))
       }
     }
     is (s_wait) {
+      // if we are in s_wait, wait until we get a response from the htw.
       next_state := Mux(io.htw.resp.valid, s_ready, s_wait)
     }
     is (s_victim_req) {
