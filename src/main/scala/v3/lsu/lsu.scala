@@ -273,7 +273,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     "dcache_miss", 
   )
 
-  val htlb = Module(new HTLB(HTLBConfig(boomParams.nL1HTLBSets, boomParams.nL1HTLBWays)))
+  val htlb = Module(new HTLBSimple(HTLBConfig(boomParams.nL1HTLBSets, boomParams.nL1HTLBWays)))
   io.htw <> htlb.io.htw
   io.htlb_mem <> htlb.io.mem
   htlb.io.htDump <> io.core.htDump
