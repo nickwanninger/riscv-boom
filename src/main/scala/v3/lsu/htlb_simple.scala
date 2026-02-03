@@ -14,6 +14,78 @@ import freechips.rocketchip.tile.CoreBundle
 import freechips.rocketchip.jtag.JtagState.State.width
 import freechips.rocketchip.tilelink.TLMessages.d
 
+
+
+class TimelineTracker() {
+  val cycle = RegInit(0.U(64.W))
+  cycle := cycle + 1.U
+
+  def start(thread: String, event: String): Unit = {
+    midas.targetutils.SynthesizePrintf(printf(s"TL(S,$thread,$event,%d)\n", cycle))
+  }
+
+  def end(thread: String, event: String): Unit = {
+    midas.targetutils.SynthesizePrintf(printf(s"TL(E,$thread,$event,%d)\n", cycle))
+  }
+
+  def mark(thread: String, event: String): Unit = {
+    midas.targetutils.SynthesizePrintf(printf(s"TL(M,$thread,$event,%d)\n", cycle))
+  }
+
+  def trackState(thread: String, event: String, sig: Bool, value: UInt = 0.U): Unit = {
+    val startCycle = RegInit(0.U(64.W))
+    val prev = RegNext(sig, false.B)
+
+    when(sig && !prev) {
+      startCycle := cycle
+    }
+    when(!sig && prev) {
+      // emit a timeline bound
+      midas.targetutils.SynthesizePrintf(printf(s"TL(B,$thread,$event,%d,%d,%d)\n", cycle, startCycle, value))
+    }
+  }
+
+  def trackCounter(thread: String, count: UInt): Unit = {
+    val prev = RegNext(count, 0.U)
+    when(count =/= prev) {
+      midas.targetutils.SynthesizePrintf(printf(s"TL(C,$thread,%d,%d)\n", cycle, count))
+    }
+  }
+}
+
+
+
+
+class HandleTraceQueue(width: Int, log2Depth: Int)(implicit p: Parameters)
+    extends BoomModule()(p) {
+  val io = IO(new Bundle {
+    val enq = Flipped(Decoupled(UInt(width.W)))
+  })
+
+  val depth = 1 << log2Depth
+  val queue = Reg(Vec(depth, UInt(width.W)))
+  val head = RegInit(0.U(log2Depth.W))
+  val tail = RegInit(0.U(log2Depth.W))
+  val count = RegInit(0.U((log2Depth + 1).W))
+
+  val full = count === depth.U
+  io.enq.ready := true.B
+
+  when(io.enq.valid) {
+    queue(tail) := io.enq.bits
+    tail := tail + 1.U
+
+    when(full) {
+      head := head + 1.U
+    }.otherwise {
+      count := count + 1.U
+    }
+  }
+}
+
+
+
+
 class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     extends BoomModule()(p) {
   val io = IO(new Bundle {
@@ -85,57 +157,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     }
   }
 
-  class HandleTraceQueue(width: Int, log2Depth: Int)(implicit p: Parameters)
-      extends BoomModule()(p) {
-    val io = IO(new Bundle {
-      val enq = Flipped(Decoupled(UInt(width.W)))
-    })
-
-    val depth = 1 << log2Depth
-    val queue = Reg(Vec(depth, UInt(width.W)))
-    val head = RegInit(0.U(log2Depth.W))
-    val tail = RegInit(0.U(log2Depth.W))
-    val count = RegInit(0.U((log2Depth + 1).W))
-
-    val full = count === depth.U
-    io.enq.ready := true.B
-
-    when(io.enq.valid) {
-      queue(tail) := io.enq.bits
-      tail := tail + 1.U
-
-      when(full) {
-        head := head + 1.U
-      }.otherwise {
-        count := count + 1.U
-      }
-
-      if (boomParams.enableStateTracing) {
-        val start_offset = Mux(full, 1.U, 0.U)
-        val num_old_items = Mux(full, (depth - 1).U, count)
-
-        // Using simpler masking for circular access
-        val mask = (depth - 1).U
-
-        midas.targetutils.SynthesizePrintf(
-          printf("[H Queue] %d/%d: ", head, tail)
-        )
-
-        for (i <- 0 until depth) {
-          // Access with mask to handle wrap
-          val idx = (head + start_offset + i.U) & mask
-
-          when(i.U < num_old_items) {
-            midas.targetutils.SynthesizePrintf(printf("%x ", queue(idx)))
-          }.elsewhen(i.U === num_old_items) {
-            midas.targetutils.SynthesizePrintf(printf("%x ", io.enq.bits))
-          }
-        }
-        midas.targetutils.SynthesizePrintf(printf("\n"))
-      }
-    }
-  }
-
+  val timeline = new TimelineTracker()
 
   // Utilities
   val hm_enabled = !io.req(0).bits.passthrough
@@ -179,32 +201,15 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   val next_state = WireDefault(state)
 
 
-  midas.targetutils.PerfCounter(state === s_ready, "htlb_s_ready", "htlb_s_ready")
-  midas.targetutils.PerfCounter(state === s_check_l0, "htlb_s_check_l0", "htlb_s_check_l0")
-  midas.targetutils.PerfCounter(state === s_request_top_level, "htlb_s_request_top_level", "htlb_s_request_top_level")
-  midas.targetutils.PerfCounter(state === s_wait_top_level, "htlb_s_wait_top_level", "htlb_s_wait_top_level")
-  midas.targetutils.PerfCounter(state === s_request_second_level, "htlb_s_request_second_level", "htlb_s_request_second_level")
-  midas.targetutils.PerfCounter(state === s_wait_second_level, "htlb_s_wait_second_level", "htlb_s_wait_second_level")
-  midas.targetutils.PerfCounter(io.req(0).fire && htlb_miss, "htlb_miss", "htlb_miss")
-  midas.targetutils.PerfCounter(io.req(0).fire && htlb_hit && (state =/= s_ready), "htlb_hit_while_waiting", "htlb_hit_while_waiting")
+  // Consider the number of times the HTLB is not ready (that is, it is dealing with a miss, blocking the LSU)
+  midas.targetutils.PerfCounter(state =/= s_ready, "htlb_waiting", "htlb_waiting")
 
 
-  // if (boomParams.enableStateTracing) {
-  //   midas.targetutils.SynthesizePrintf(printf("HTLBSTATE %d\n", state))
-  // }
+  timeline.trackState("htlb.access", "miss", io.req(0).fire && hm_enabled && htlb_miss)
+  timeline.trackState("htlb.access", "hit", io.req(0).fire && hm_enabled && htlb_hit)
 
-  val mem_resp_valid = RegNext(io.mem.resp.valid)
-  val mem_resp_data = RegNext(io.mem.resp.bits.data)
-
-  // Uncached response handling (if ever valid)
-  io.mem.uncached_resp.map { resp =>
-    assert(!(resp.valid && io.mem.resp.valid))
-    resp.ready := true.B
-    when(resp.valid) {
-      mem_resp_valid := true.B
-      mem_resp_data := resp.bits.data
-    }
-  }
+  val mem_resp_valid = io.mem.resp.valid
+  val mem_resp_data = io.mem.resp.bits.data
 
   // HTW: L0 Cache (Top Level Cache) Setup
   // Adapted from HTW.scala
@@ -258,37 +263,89 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   io.mem.s1_data.mask := 0.U
   io.mem.s2_kill := false.B
   io.mem.keep_clock_enabled := false.B
+  // Uncached response handling (if ever valid)
+  io.mem.uncached_resp.foreach(_.ready := true.B)
 
   // FSM Implementation
   state := Mux(io.htlb_enabled, next_state, s_ready)
 
+
+  // timeline.trackState("htlb", "ready", state === s_ready)
+  timeline.trackState("htlb.state", "check_l0", state === s_check_l0)
+  timeline.trackState("htlb.state", "request_top_level", state === s_request_top_level)
+  timeline.trackState("htlb.state", "wait_top_level", state === s_wait_top_level)
+  timeline.trackState("htlb.state", "request_second_level", state === s_request_second_level)
+  timeline.trackState("htlb.state", "wait_second_level", state === s_wait_second_level)
+
+  timeline.trackState("htlb.state", "mem_req", io.mem.req.valid)
+  timeline.trackState("htlb.state", "mem_resp", io.mem.resp.valid)
+
+
+  for (s <- 0 until cfg.nSets) {
+    for (w <- 0 until cfg.nWays) {
+      val e = entries(s)(w)
+      timeline.trackState(s"htlb.s${s}w${w}", "invalid", !e.valid, e.tag)
+    }
+  }
+
+
   switch(state) {
+
+
+
     is(s_ready) {
       // If a simple miss, start handling it
-      // Removed memWidth loop, assume w=0
       when(io.req(0).fire && htlb_miss) {
         hid_req := hid
+        
         if (boomParams.enableTwoStageHTW) {
           // Check L0 cache immediately.
           val cache = top_level_cache.get
-          val l0_entry = cache(l0_lookup_idx)
-          val l0_hit = l0_entry.valid && l0_entry.tag === l0_lookup_tag
-
-          if (boomParams.enableStateTracing) {
-            midas.targetutils.SynthesizePrintf(printf("[H%d|CheckL0] HIDReq: %x, L0Hit: %b\n", state, hid_req, l0_hit))
-          }
+          // Must use 'hid' (current input) not 'hid_req' (stored register) for immediate lookup
+          val l0_idx = getIndex(hid)
+          val l0_tag = getTag(hid)
+          val l0_entry = cache(l0_idx)
+          val l0_hit = l0_entry.valid && l0_entry.tag === l0_tag
 
           when(l0_hit) {
             inner_walk_base := l0_entry.data
-            next_state := s_request_second_level
+            // Fast Path: Request Second Level immediately
+            // Addr = l0_entry.data + (hid & mask) * 8
+            walk_addr := l0_entry.data + (hid(entries_per_ht_bits - 1, 0)) * 8.U
+            io.mem.req.valid := true.B
+            
+            when (io.mem.req.fire) {
+               next_state := s_wait_second_level
+            } .otherwise {
+               next_state := s_request_second_level
+            }
           }.otherwise {
-            next_state := s_request_top_level
+            // Fast Path: Request Top Level immediately
+            // Addr = htBase + (hid >> entries_per_ht_bits) * 8
+            walk_addr := io.htBase + (hid >> entries_per_ht_bits) * 8.U
+            io.mem.req.valid := true.B
+            
+            when (io.mem.req.fire) {
+               next_state := s_wait_top_level
+            } .otherwise {
+               next_state := s_request_top_level
+            }
           }
         } else {
-          next_state := s_request_second_level
+          // Single stage: Request immediately
+          walk_addr := io.htBase + hid * 8.U
+          io.mem.req.valid := true.B
+          
+          when (io.mem.req.fire) {
+             next_state := s_wait_second_level
+          } .otherwise {
+             next_state := s_request_second_level
+          }
         }
       }
     }
+
+
     is(s_request_top_level) {
       if (boomParams.enableTwoStageHTW) {
         // Request L0 entry from memory
@@ -296,15 +353,15 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
         walk_addr := io.htBase + (hid_req >> entries_per_ht_bits) * 8.U
         io.mem.req.valid := true.B
 
-        if (boomParams.enableStateTracing) {
-          midas.targetutils.SynthesizePrintf(printf("[H%d|ReqOuter] Addr: %x, Base: %x, HID: %x\n", state, walk_addr, io.htBase, hid_req))
-        }
-
+        // Only advance state if the request actually fired
         when(io.mem.req.fire) {
           next_state := s_wait_top_level
         }
       }
     }
+
+
+
     is(s_wait_top_level) {
       if (boomParams.enableTwoStageHTW) {
         // Wait for outer walk response
@@ -317,16 +374,26 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           cache(fill_idx).data := mem_resp_data
 
           inner_walk_base := mem_resp_data
-          next_state := s_request_second_level
+          
+          // Fast Path: Request Second Level immediately
+          // Addr = mem_resp_data + (hid_req & mask) * 8
+          walk_addr := mem_resp_data + (hid_req(entries_per_ht_bits - 1, 0)) * 8.U
+          io.mem.req.valid := true.B
 
-          if (boomParams.enableStateTracing) {
-            midas.targetutils.SynthesizePrintf(printf("[H%d|RespOuter] Data: %x\n", state, mem_resp_data))
+          when (io.mem.req.fire) {
+             next_state := s_wait_second_level
+          } .otherwise {
+             next_state := s_request_second_level
           }
+
         }.elsewhen(io.mem.s2_nack) {
           next_state := s_request_top_level
         }
       }
     }
+
+
+
     is(s_request_second_level) {
       // Request Inner Entry (HTE)
       // Addr = inner_walk_base + (hid & mask) * 8
@@ -342,29 +409,16 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
       io.mem.req.valid := true.B
 
-      if (boomParams.enableStateTracing) {
-        midas.targetutils.SynthesizePrintf(
-          printf(
-            "[H%d|ReqInner] Addr: %x, Base: %x, HID: %x\n",
-            state,
-            walk_addr,
-            inner_walk_base,
-            hid_req
-          )
-        )
-      }
-
       when(io.mem.req.fire) {
         next_state := s_wait_second_level
       }
     }
+
+
+
     is(s_wait_second_level) {
       when(mem_resp_valid) {
-        if (boomParams.enableStateTracing) {
-          midas.targetutils.SynthesizePrintf(
-            printf("[H%d|RespInner] Data: %x\n", state, mem_resp_data)
-          )
-        }
+        timeline.mark("htlb.state", "observe_mem_resp")
 
         // Insert into L1 entries at valid hid_req
         // No victim handling needed for simplificaiton, just overwrite
@@ -389,28 +443,19 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
         entries(r_idx)(repl_way).insert(r_tag, newEntry)
 
-        if (boomParams.enableStateTracing) {
-          midas.targetutils.SynthesizePrintf(
-            printf(
-              "[H%d|Refill] HID: %x, Addr: %x, Phys: %b, Raw: %x\n",
-              state,
-              hid_req,
-              newEntry.addr,
-              newEntry.phys,
-              mem_resp_data
-            )
-          )
-        }
-
         // trace_queue.io.enq.valid := true.B
         // trace_queue.io.enq.bits := hid_req
 
         next_state := s_ready
 
       }.elsewhen(io.mem.s2_nack) {
+        timeline.mark("htlb.state", "retry_nack")
         next_state := s_request_second_level
       }
     }
+
+
+
   }
 
   // ------------------------------------------------------------------------------------------------
