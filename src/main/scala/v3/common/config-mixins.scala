@@ -208,6 +208,8 @@ class WithNSmallYukons(n: Int = 1) extends Config(
               numLdqEntries = 8,
               numStqEntries = 8,
               maxBrCount = 8,
+              nL1HTLBWays = 16,
+              nL1HTLBSets = 4,
               numFetchBufferEntries = 8,
               ftq = FtqParameters(nEntries=16),
               nPerfCounters = 4,

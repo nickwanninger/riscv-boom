@@ -20,4 +20,9 @@ source sourceme-manager.sh
 cd target-design/chipyard/sims/verilator
 make CONFIG=VSmallDebugYukonConfig run-binary BINARY=/pool/nick/firesim/target-design/chipyard/tests/hw_alaska/list_reverse_256.riscv
 
+
+
+## list_reverse_256.riscv
+- original:   196947 cycles
+- simplified: 198647 cycles
 ```
