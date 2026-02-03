@@ -220,8 +220,30 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.hellacache := DontCare
 
 
+  var timeline = new TimelineTracker()
+
+
   val ldq = Reg(Vec(numLdqEntries, Valid(new LDQEntry)))
   val stq = Reg(Vec(numStqEntries, Valid(new STQEntry)))
+
+  for (i <- 0 until numLdqEntries) {
+    val track = "ldq." + i
+    timeline.trackState(track, "pointer", ldq(i).valid && !ldq(i).bits.is_handle, ldq(i).bits.addr.bits)
+    timeline.trackState(track, "handle", ldq(i).valid && ldq(i).bits.is_handle, ldq(i).bits.addr.bits)
+    timeline.trackState(track, "executed", ldq(i).valid && ldq(i).bits.executed, ldq(i).bits.addr.bits)
+    timeline.trackState(track, "succeeded", ldq(i).valid && ldq(i).bits.succeeded, ldq(i).bits.addr.bits)
+    timeline.trackState(track, "order_fail", ldq(i).valid && ldq(i).bits.order_fail, ldq(i).bits.addr.bits)
+    timeline.trackState(track, "observed", ldq(i).valid && ldq(i).bits.observed, ldq(i).bits.addr.bits)
+  }
+
+  for (i <- 0 until numStqEntries) {
+    val track = "stq." + i
+    timeline.trackState(track, "pointer", stq(i).valid && !stq(i).bits.is_handle, stq(i).bits.addr.bits)
+    timeline.trackState(track, "handle", stq(i).valid && stq(i).bits.is_handle, stq(i).bits.addr.bits)
+    timeline.trackState(track, "committed", stq(i).valid && stq(i).bits.committed, stq(i).bits.addr.bits)
+    timeline.trackState(track, "succeeded", stq(i).valid && stq(i).bits.succeeded, stq(i).bits.addr.bits)
+    timeline.trackState(track, "data_valid", stq(i).valid && stq(i).bits.data.valid, stq(i).bits.addr.bits)
+  }
 
 
 
@@ -231,6 +253,14 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val stq_tail         = Reg(UInt(stqAddrSz.W))
   val stq_commit_head  = Reg(UInt(stqAddrSz.W)) // point to next store to commit
   val stq_execute_head = Reg(UInt(stqAddrSz.W)) // point to next store to execute
+
+
+  timeline.trackCounter("ldq.head", ldq_head)
+  timeline.trackCounter("ldq.tail", ldq_tail)
+  timeline.trackCounter("stq.head", stq_head)
+  timeline.trackCounter("stq.tail", stq_tail)
+  timeline.trackCounter("stq.commit_head", stq_commit_head)
+  timeline.trackCounter("stq.execute_head", stq_execute_head)
 
 
   // If we got a mispredict, the tail will be misaligned for 1 extra cycle
@@ -257,6 +287,13 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val hella_data            = Reg(new rocket.HellaCacheWriteData)
   val hella_paddr           = Reg(UInt(paddrBits.W))
   val hella_xcpt            = Reg(new rocket.HellaCacheExceptions)
+  // timeline.trackState("hella", "ready", hella_state === h_ready)
+  timeline.trackState("hella", "s1", hella_state === h_s1)
+  timeline.trackState("hella", "s2", hella_state === h_s2)
+  timeline.trackState("hella", "s2_nack", hella_state === h_s2_nack)
+  timeline.trackState("hella", "wait", hella_state === h_wait)
+  timeline.trackState("hella", "replay", hella_state === h_replay)
+  timeline.trackState("hella", "dead", hella_state === h_dead)
 
 
   val dtlb = Module(new NBDTLB(
@@ -315,8 +352,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val stq_nonempty = (0 until numStqEntries).map{ i => stq(i).valid }.reduce(_||_) =/= 0.U
   val ldq_nonempty = (0 until numLdqEntries).map{ i => ldq(i).valid }.reduce(_||_) =/= 0.U
 
-  val counter = RegInit(0.U(9.W))
-  counter := Mux(io.core.commit_load_at_rob_head && !ldq_nonempty && htlb_enabled, Mux(counter === 511.U, 0.U, counter + 1.U), 0.U)
+  // val counter = RegInit(0.U(9.W))
+  // counter := Mux(io.core.commit_load_at_rob_head && !ldq_nonempty && htlb_enabled, Mux(counter === 511.U, 0.U, counter + 1.U), 0.U)
 
   // assert(counter =/= 511.U, "Trying to commit loads that aren't there")
 
@@ -595,6 +632,37 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   midas.targetutils.PerfCounter(can_fire_hella_incoming.reduce(_||_), "lsu_can_fire_hella_incoming", "lsu_can_fire_hella_incoming")
   midas.targetutils.PerfCounter(can_fire_hella_wakeup.reduce(_||_), "lsu_can_fire_hella_wakeup", "lsu_can_fire_hella_wakeup")
 
+  {
+      val idx = ldq_wakeup_idx
+      val e   = ldq_wakeup_e
+      val v   = e.valid && e.bits.addr.valid && !e.bits.executed && !e.bits.succeeded && !e.bits.addr_is_virtual
+      val wait_uncacheable = e.bits.addr_is_uncacheable && !(io.core.commit_load_at_rob_head && ldq_head === idx && e.bits.st_dep_mask.asUInt === 0.U)
+
+      timeline.trackState("lsu_sched.lqw", "valid", v, e.bits.addr.bits)
+      timeline.trackState("lsu_sched.lqw", "blocked_hazard", v && (p1_block_load_mask(idx) || p2_block_load_mask(idx)), e.bits.addr.bits)
+      timeline.trackState("lsu_sched.lqw", "blocked_store_order", v && store_needs_order, e.bits.addr.bits)
+      timeline.trackState("lsu_sched.lqw", "blocked_wakeup_logic", v && block_load_wakeup, e.bits.addr.bits)
+      timeline.trackState("lsu_sched.lqw", "blocked_uncacheable", v && wait_uncacheable, e.bits.addr.bits)
+      timeline.trackState("lsu_sched.lqw", "blocked_order_fail", v && e.bits.order_fail, e.bits.addr.bits)
+  }
+  {
+      val idx = ldq_retry_idx
+      val e   = ldq_retry_e
+      val v   = e.valid && e.bits.addr.valid && e.bits.addr_is_virtual
+      val block = p1_block_load_mask(idx) || p2_block_load_mask(idx)
+      
+      timeline.trackState("lsu_sched.lqr", "valid", v, e.bits.addr.bits)
+      timeline.trackState("lsu_sched.lqr", "blocked_hazard", v && block, e.bits.addr.bits)
+      timeline.trackState("lsu_sched.lqr", "blocked_store_order", v && store_needs_order, e.bits.addr.bits)
+
+      val is_handle = e.bits.addr.bits(63) && !e.bits.addr.bits(62)
+      val canFireVirtual = e.bits.addr_is_virtual && !is_handle && canFire(e.bits.addr_is_virtual, e.bits.addr.bits)
+      timeline.trackState("lsu_sched.lqr", "blocked_tlb_not_ready", v && !canFireVirtual, e.bits.addr.bits)
+      val canFireHandle = is_handle && canFire(e.bits.addr_is_virtual, e.bits.addr.bits)
+      timeline.trackState("lsu_sched.lqr", "blocked_htlb_not_ready", v && !canFireHandle, e.bits.addr.bits)
+      timeline.trackState("lsu_sched.lqr", "blocked_order_fail", v && e.bits.order_fail, e.bits.addr.bits)
+  }
+
   // can't fire anything? debug print all cases
   when (htlb_enabled && false.B) {
     when (!(can_fire_load_incoming.reduce(_||_) || can_fire_stad_incoming.reduce(_||_) || can_fire_sta_incoming.reduce(_||_) ||
@@ -642,18 +710,24 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     var lcam_avail = true.B
     var rob_avail  = true.B
 
-    def lsu_sched(can_fire: Bool, uses_htlb: Boolean, uses_tlb: Boolean, uses_dc: Boolean, uses_lcam: Boolean, uses_rob: Boolean): Bool = {
+    def lsu_sched(name: String, can_fire: Bool, uses_htlb: Boolean, uses_tlb: Boolean, uses_dc: Boolean, uses_lcam: Boolean, uses_rob: Boolean): Bool = {
       val will_fire = can_fire && !(uses_htlb.B && !htlb_avail) &&
                                   !(uses_tlb.B && !tlb_avail) &&
                                   !(uses_lcam.B && !lcam_avail) &&
                                   !(uses_dc.B && !dc_avail) &&
                                   !(uses_rob.B && !rob_avail)
+      // timeline.trackState("lsu_sched_res."+name, "htlb", htlb_avail)
+      // timeline.trackState("lsu_sched_res."+name, "dc", uses_dc.B && dc_avail)
       htlb_avail  = htlb_avail  && !(will_fire && uses_htlb.B)
       tlb_avail  = tlb_avail  && !(will_fire && uses_tlb.B)
       lcam_avail = lcam_avail && !(will_fire && uses_lcam.B)
       dc_avail   = dc_avail   && !(will_fire && uses_dc.B)
       rob_avail  = rob_avail  && !(will_fire && uses_rob.B)
       dontTouch(will_fire) // dontTouch these so we can inspect the will_fire signals
+
+      timeline.trackState("lsu_sched_decisions." + name, "blocked", can_fire && !will_fire)
+      timeline.trackState("lsu_sched_decisions." + name, "fired", can_fire && will_fire)
+
       will_fire
     }
 
@@ -664,22 +738,45 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     // Notes on performance
     //  - Prioritize releases, this speeds up cache line writebacks and refills
     //  - Store commits are lowest priority, since they don't "block" younger instructions unless stq fills up
-    will_fire_load_incoming (w) := lsu_sched(can_fire_load_incoming (w) , true , true, true , true , false) // TLB , DC , LCAM
-    will_fire_stad_incoming (w) := lsu_sched(can_fire_stad_incoming (w) , true , true , false, true , true)  // TLB ,    , LCAM , ROB
-    will_fire_sta_incoming  (w) := lsu_sched(can_fire_sta_incoming  (w) , true , true, false, true , true)  // TLB ,    , LCAM , ROB
-    will_fire_std_incoming  (w) := lsu_sched(can_fire_std_incoming  (w) , false, false, false, false, true)  //                 , ROB
-    will_fire_sfence        (w) := lsu_sched(can_fire_sfence        (w) , true , true, false, false, true)  // TLB ,    ,      , ROB
-    will_fire_release       (w) := lsu_sched(can_fire_release       (w) , false, false, false, true , false) //            LCAM
-    will_fire_hella_incoming(w) := lsu_sched(can_fire_hella_incoming(w) , true , true, true , false, false) // TLB , DC
-    will_fire_hella_wakeup  (w) := lsu_sched(can_fire_hella_wakeup  (w) , false, false, true , false, false) //     , DC
-    will_fire_load_retry    (w) := lsu_sched(can_fire_load_retry    (w) , true , true, true , true , false) // TLB , DC , LCAM
-    will_fire_sta_retry     (w) := lsu_sched(can_fire_sta_retry     (w) , true , true, false, true , true)  // TLB ,    , LCAM , ROB // TODO: This should be higher priority
-    will_fire_load_wakeup   (w) := lsu_sched(can_fire_load_wakeup   (w) , false, false, true, true , false) //     , DC , LCAM1
-    will_fire_store_commit  (w) := lsu_sched(can_fire_store_commit  (w) , false, false, true , false, false) //     , DC
+    will_fire_load_incoming (w) := lsu_sched("A load_incoming", can_fire_load_incoming (w) , true , true, true , true , false) // TLB , DC , LCAM
+    will_fire_stad_incoming (w) := lsu_sched("B stad_incoming", can_fire_stad_incoming (w) , true , true , false, true , true)  // TLB ,    , LCAM , ROB
+    will_fire_sta_incoming  (w) := lsu_sched("C sta_incoming",  can_fire_sta_incoming  (w) , true , true, false, true , true)  // TLB ,    , LCAM , ROB
+    will_fire_std_incoming  (w) := lsu_sched("D std_incoming",  can_fire_std_incoming  (w) , false, false, false, false, true)  //                 , ROB
+    will_fire_sfence        (w) := lsu_sched("E sfence",        can_fire_sfence        (w) , true , true, false, false, true)  // TLB ,    ,      , ROB
+    will_fire_release       (w) := lsu_sched("F release",       can_fire_release       (w) , false, false, false, true , false) //            LCAM
+
+    // timeline.trackState("lsu_hella_blocked", "tlb", can_fire_hella_incoming(w) &&  !tlb_avail)
+    // timeline.trackState("lsu_hella_blocked", "dc", can_fire_hella_incoming(w) &&  !dc_avail)
+
+    will_fire_hella_incoming(w) := lsu_sched("G hella_incoming",can_fire_hella_incoming(w) , false /* ?? */ , true, true , false, false) // TLB , DC
+    will_fire_hella_wakeup  (w) := lsu_sched("H hella_wakeup",  can_fire_hella_wakeup  (w) , false, false, true , false, false) //     , DC
+    will_fire_load_retry    (w) := lsu_sched("I load_retry",    can_fire_load_retry    (w) , true , true, true , true , false) // TLB , DC , LCAM
+    will_fire_sta_retry     (w) := lsu_sched("J sta_retry",     can_fire_sta_retry     (w) , true , true, false, true , true)  // TLB ,    , LCAM , ROB // TODO: This should be higher priority
+    will_fire_load_wakeup   (w) := lsu_sched("K load_wakeup",   can_fire_load_wakeup   (w) , false, false, true, true , false) //     , DC , LCAM1
+    will_fire_store_commit  (w) := lsu_sched("L store_commit",  can_fire_store_commit  (w) , false, false, true , false, false) //     , DC
     when (htlb_enabled && false.B) {
       midas.targetutils.SynthesizePrintf(printf("wf:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
         will_fire_load_incoming(w), will_fire_stad_incoming(w), will_fire_sta_incoming(w), will_fire_std_incoming(w), will_fire_sfence(w), will_fire_release(w), will_fire_hella_incoming(w), will_fire_hella_wakeup(w), will_fire_load_retry(w), will_fire_sta_retry(w), will_fire_load_wakeup(w), will_fire_store_commit(w)))
     }
+
+    timeline.trackState("lsu_sched." + w, "will_fire_load_incoming",  will_fire_load_incoming(w))
+    timeline.trackState("lsu_sched." + w, "will_fire_stad_incoming",  will_fire_stad_incoming(w))
+    timeline.trackState("lsu_sched." + w, "will_fire_sta_incoming",   will_fire_sta_incoming(w))
+    timeline.trackState("lsu_sched." + w, "will_fire_std_incoming",   will_fire_std_incoming(w))
+    timeline.trackState("lsu_sched." + w, "will_fire_sfence",         will_fire_sfence(w))
+    timeline.trackState("lsu_sched." + w, "will_fire_release",        will_fire_release(w))
+    timeline.trackState("lsu_sched." + w, "will_fire_hella_incoming", will_fire_hella_incoming(w))
+    timeline.trackState("lsu_sched." + w, "will_fire_hella_wakeup",   will_fire_hella_wakeup(w))
+    timeline.trackState("lsu_sched." + w, "will_fire_load_retry",     will_fire_load_retry(w))
+    timeline.trackState("lsu_sched." + w, "will_fire_sta_retry",      will_fire_sta_retry(w))
+    timeline.trackState("lsu_sched." + w, "will_fire_load_wakeup",    will_fire_load_wakeup(w))
+    timeline.trackState("lsu_sched." + w, "will_fire_store_commit",   will_fire_store_commit(w))
+
+    timeline.trackState("lsu_sched.htlb" + w, "htlb", htlb_avail)
+    timeline.trackState("lsu_sched.tlb" + w, "tlb", tlb_avail)
+    timeline.trackState("lsu_sched.lcam" + w, "lcam", lcam_avail)
+    timeline.trackState("lsu_sched.dc" + w, "dc", dc_avail)
+    timeline.trackState("lsu_sched.rob" + w, "rob", rob_avail)
 
 
     assert(!(exe_req(w).valid && !(will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w) || will_fire_std_incoming(w) || will_fire_sfence(w))))
@@ -782,7 +879,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                                           Mux(will_fire_hella_incoming(w), true.B, !((is_ht_infinite || (!is_ht_infinite && hid(w) < io.core.htSize)) && is_handle(w))), true.B))
   htlb.io.ht_size := io.core.htSize
   htlb.io.htlb_enabled := htlb_enabled
-  htlb.io.pht_enabled := ENABLE_PHT.B
+  // htlb.io.pht_enabled := ENABLE_PHT.B
+  htlb.io.pht_enabled := true.B
 
   val is_incoming = widthMap(w => will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w))
 
@@ -825,6 +923,30 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   }
   dtlb.io.kill                      := exe_kill.reduce(_||_)
   dtlb.io.sfence                    := exe_sfence
+
+  for (i <- 0 until numLdqEntries) {
+    val h_hits = (0 until memWidth).map(w => htlb.io.req(w).valid && exe_tlb_uop(w).uses_ldq && exe_tlb_uop(w).ldq_idx === i.U)
+    val h_valid = h_hits.reduce(_||_)
+    val h_addr  = Mux1H(h_hits, (0 until memWidth).map(w => htlb.io.req(w).bits.haddr))
+    timeline.trackState(s"ldq.$i", "htlb_access", h_valid, h_addr)
+
+    val d_hits = (0 until memWidth).map(w => dtlb.io.req(w).valid && exe_tlb_uop(w).uses_ldq && exe_tlb_uop(w).ldq_idx === i.U)
+    val d_valid = d_hits.reduce(_||_)
+    val d_addr  = Mux1H(d_hits, (0 until memWidth).map(w => dtlb.io.req(w).bits.vaddr))
+    timeline.trackState(s"ldq.$i", "dtlb_access", d_valid, d_addr)
+  }
+
+  for (i <- 0 until numStqEntries) {
+    val h_hits = (0 until memWidth).map(w => htlb.io.req(w).valid && exe_tlb_uop(w).uses_stq && exe_tlb_uop(w).stq_idx === i.U)
+    val h_valid = h_hits.reduce(_||_)
+    val h_addr  = Mux1H(h_hits, (0 until memWidth).map(w => htlb.io.req(w).bits.haddr))
+    timeline.trackState(s"stq.$i", "htlb_access", h_valid, h_addr)
+
+    val d_hits = (0 until memWidth).map(w => dtlb.io.req(w).valid && exe_tlb_uop(w).uses_stq && exe_tlb_uop(w).stq_idx === i.U)
+    val d_valid = d_hits.reduce(_||_)
+    val d_addr  = Mux1H(d_hits, (0 until memWidth).map(w => dtlb.io.req(w).bits.vaddr))
+    timeline.trackState(s"stq.$i", "dtlb_access", d_valid, d_addr)
+  }
 
   // exceptions
   val ma_ld = widthMap(w => will_fire_load_incoming(w) && exe_req(w).bits.mxcpt.valid) // We get ma_ld in memaddrcalc
@@ -952,6 +1074,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.dmem.req.valid := dmem_req.map(_.valid).reduce(_||_)
   io.dmem.req.bits  := dmem_req
   val dmem_req_fire = widthMap(w => dmem_req(w).valid && io.dmem.req.fire)
+  timeline.trackState("dcache.memreq", "io.dmem.req.fire", io.dmem.req.fire)
+  // timeline.trackState("dcache.memreq", "io.dmem.req.valid", io.dmem.req.valid)
+  timeline.trackState("dcache.memreq", "fire", dmem_req_fire.reduce(_||_))
 
   val s0_executing_loads = WireInit(VecInit((0 until numLdqEntries).map(x=>false.B)))
 
@@ -1262,6 +1387,12 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   val failed_loads     = WireInit(VecInit((0 until numLdqEntries).map(x=>false.B))) // Loads which we will report as failures (throws a mini-exception)
   val nacking_loads    = WireInit(VecInit((0 until numLdqEntries).map(x=>false.B))) // Loads which are being nacked by dcache in the next stage
+
+  for (i <- 0 until numLdqEntries) {
+    val track = "ldq." + i
+    timeline.trackState(track, "failed", failed_loads(i), ldq(i).bits.addr.bits)
+    timeline.trackState(track, "nacking", nacking_loads(i), ldq(i).bits.addr.bits)
+  }
 
   val s1_executing_loads = RegNext(s0_executing_loads)
   val s1_set_execute     = WireInit(s1_executing_loads)
