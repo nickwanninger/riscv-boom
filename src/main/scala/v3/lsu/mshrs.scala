@@ -33,7 +33,7 @@ class BoomDCacheReqInternal(implicit p: Parameters) extends BoomDCacheReq()(p)
 }
 
 
-class BoomMSHR(implicit edge: TLEdgeOut, p: Parameters) extends BoomModule()(p)
+class BoomMSHR(id: Int)(implicit edge: TLEdgeOut, p: Parameters) extends BoomModule()(p)
   with HasL1HellaCacheParameters
 {
   val io = IO(new Bundle {
@@ -107,6 +107,10 @@ class BoomMSHR(implicit edge: TLEdgeOut, p: Parameters) extends BoomModule()(p)
   val state = RegInit(s_invalid)
 
   val req     = Reg(new BoomDCacheReqInternal)
+
+  val timeline = new TimelineTracker()
+  // timeline.trackCounter(s"mshr.$id", state)
+  timeline.trackState(s"mshr.$id", "active", state =/= s_invalid, req.addr)
   val req_idx = req.addr(untagBits-1, blockOffBits)
   val req_tag = req.addr >> untagBits
   val req_block_addr = (req.addr >> blockOffBits) << blockOffBits
@@ -629,7 +633,7 @@ class BoomMSHRFile(implicit edge: TLEdgeOut, p: Parameters) extends BoomModule()
   val pri_rdy = WireInit(false.B)
   val pri_val = req.valid && sdq_rdy && cacheable && !idx_match(req_idx)
   val mshrs = (0 until cfg.nMSHRs) map { i =>
-    val mshr = Module(new BoomMSHR)
+    val mshr = Module(new BoomMSHR(i))
     mshr.io.id := i.U(log2Ceil(cfg.nMSHRs).W)
 
     for (w <- 0 until memWidth) {

@@ -142,6 +142,27 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   val priv_uses_vm = priv <= PRV.S.U
   val vm_enabled = widthMap(w => usingVM.B && io.ptw.ptbr.mode(io.ptw.ptbr.mode.getWidth-1) && priv_uses_vm && !io.req(w).bits.passthrough && !io.req(w).bits.htlb_passthrough)
 
+  val timeline = new TimelineTracker()
+  timeline.trackState("tlb.state", "ready", state === s_ready)
+  timeline.trackState("tlb.state", "request", state === s_request)
+  timeline.trackState("tlb.state", "wait", state === s_wait)
+  timeline.trackState("tlb.state", "wait_invalidate", state === s_wait_invalidate)
+
+  timeline.trackState("tlb.state", "ptw_req", io.ptw.req.valid)
+  timeline.trackState("tlb.state", "ptw_resp", io.ptw.resp.valid)
+
+  // for (w <- 0 until memWidth) {
+  //   val hit = tlb_hit(w)
+  //   val miss = tlb_miss(w)
+  //   when (io.req(w).fire && vm_enabled(w)) {
+  //     when (miss) {
+  //       timeline.mark("tlb", "miss")
+  //     } .elsewhen (hit) {
+  //       timeline.mark("tlb", "hit")
+  //     }
+  //   }
+  // }
+
   // share a single physical memory attribute checker (unshare if critical path)
   val vpn = widthMap(w => io.req(w).bits.vaddr(vaddrBits-1, pgIdxBits))
   val refill_ppn = io.ptw.resp.bits.pte.ppn(ppnBits-1, 0)
@@ -275,6 +296,11 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   val tlb_hit = widthMap(w => real_hits(w).orR)
   val tlb_miss = widthMap(w => vm_enabled(w) && !bad_va(w) && !tlb_hit(w))
   midas.targetutils.PerfCounter(widthMap(w => io.resp(w).miss).reduce(_ || _), "l1_tlb_miss", "l1_tlb_miss")
+
+  for (w <- 0 until memWidth) {
+    timeline.trackState("tlb.access"+w, "hit", io.req(w).valid && vm_enabled(w) && tlb_hit(w))
+    timeline.trackState("tlb.access"+w, "miss", io.req(w).valid && vm_enabled(w) && tlb_miss(w))
+  }
 
   val sectored_plru = new PseudoLRU(sectored_entries.size)
   val superpage_plru = new PseudoLRU(superpage_entries.size)
