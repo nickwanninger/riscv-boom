@@ -799,6 +799,15 @@ class BoomNonBlockingDCacheModule(outer: BoomNonBlockingDCache) extends LazyModu
   dataWriteArb.io.in(1) <> mshrs.io.refill
   metaWriteArb.io.in(0) <> mshrs.io.meta_write
 
+  val timeline = new TimelineTracker()
+  for (w <- 0 until memWidth) {
+    timeline.trackState(s"dcache.pipe.$w", "s1_valid", s1_valid(w), s1_req(w).addr)
+    timeline.trackState(s"dcache.pipe.$w", "s2_valid", s2_valid(w), s2_req(w).addr)
+    timeline.trackState(s"dcache.pipe.$w", "miss", s2_valid(w) && !s2_hit(w) && !s2_nack(w), s2_req(w).addr)
+    timeline.trackState(s"dcache.pipe.$w", "hit", s2_valid(w) && s2_hit(w), s2_req(w).addr)
+    timeline.trackState(s"dcache.pipe.$w", "nack", s2_valid(w) && s2_nack(w), s2_req(w).addr)
+  }
+
   tl_out.e <> mshrs.io.mem_finish
 
   // writebacks
