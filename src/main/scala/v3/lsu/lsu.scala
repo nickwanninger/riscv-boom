@@ -228,8 +228,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   for (i <- 0 until numLdqEntries) {
     val track = "ldq." + i
-    timeline.trackState(track, "pointer", ldq(i).valid && !ldq(i).bits.is_handle, ldq(i).bits.addr.bits)
-    timeline.trackState(track, "handle", ldq(i).valid && ldq(i).bits.is_handle, ldq(i).bits.addr.bits)
+    // timeline.trackStateValue(track, ldq(i).bits.addr.bits, ldq(i).valid)
+    timeline.trackStateValue(track, "pointer", ldq(i).bits.addr.bits, ldq(i).valid && !ldq(i).bits.is_handle)
+    timeline.trackStateValue(track, "handle", ldq(i).bits.addr.bits, ldq(i).valid && ldq(i).bits.is_handle)
+
     timeline.trackState(track, "executed", ldq(i).valid && ldq(i).bits.executed, ldq(i).bits.addr.bits)
     timeline.trackState(track, "succeeded", ldq(i).valid && ldq(i).bits.succeeded, ldq(i).bits.addr.bits)
     timeline.trackState(track, "order_fail", ldq(i).valid && ldq(i).bits.order_fail, ldq(i).bits.addr.bits)
@@ -238,8 +240,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   for (i <- 0 until numStqEntries) {
     val track = "stq." + i
-    timeline.trackState(track, "pointer", stq(i).valid && !stq(i).bits.is_handle, stq(i).bits.addr.bits)
-    timeline.trackState(track, "handle", stq(i).valid && stq(i).bits.is_handle, stq(i).bits.addr.bits)
+    // timeline.trackStateValue(track, stq(i).bits.addr.bits, stq(i).valid)
+    timeline.trackStateValue(track, "pointer", stq(i).bits.addr.bits, stq(i).valid && !stq(i).bits.is_handle)
+    timeline.trackStateValue(track, "handle", stq(i).bits.addr.bits, stq(i).valid && stq(i).bits.is_handle)
     timeline.trackState(track, "committed", stq(i).valid && stq(i).bits.committed, stq(i).bits.addr.bits)
     timeline.trackState(track, "succeeded", stq(i).valid && stq(i).bits.succeeded, stq(i).bits.addr.bits)
     timeline.trackState(track, "data_valid", stq(i).valid && stq(i).bits.data.valid, stq(i).bits.addr.bits)
@@ -881,6 +884,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   htlb.io.htlb_enabled := htlb_enabled
   // htlb.io.pht_enabled := ENABLE_PHT.B
   htlb.io.pht_enabled := true.B
+
+  timeline.trackStateValue("lsu_sched.htlb", "refilling", htlb.io.refilling.bits, htlb.io.refilling.valid)
 
   val is_incoming = widthMap(w => will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w))
 

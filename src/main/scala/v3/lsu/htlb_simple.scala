@@ -32,6 +32,21 @@ class TimelineTracker() {
     midas.targetutils.SynthesizePrintf(printf(s"TL(M,$thread,$event,%d)\n", cycle))
   }
 
+  def trackStateValue(thread: String, stateName: String, stateValue: UInt, sig: Bool): Unit = {
+    val startCycle = RegInit(0.U(64.W))
+    val prev = RegNext(sig, false.B)
+    val valueAtStart = RegInit(0.U(stateValue.getWidth.W))
+
+    when(sig && !prev) {
+      startCycle := cycle
+      valueAtStart := stateValue
+    }
+    when(!sig && prev) {
+      // emit a timeline bound
+      midas.targetutils.SynthesizePrintf(printf(s"TL(B,$thread,$stateName %x,%d,%d,0)\n", valueAtStart, cycle, startCycle))
+    }
+  }
+
   def trackState(thread: String, event: String, sig: Bool, value: UInt = 0.U): Unit = {
     val startCycle = RegInit(0.U(64.W))
     val prev = RegNext(sig, false.B)
@@ -103,6 +118,8 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     val ht_size = Input(UInt(xLen.W))
     val htlb_enabled = Input(Bool())
     val pht_enabled = Input(Bool())
+
+    val refilling = Valid(UInt(handleBits.W))
   })
 
   // ------------------------------------------------------------------------------------------------
@@ -196,7 +213,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   val hid_req = Reg(UInt(handleBits.W))
 
   // State Machine
-  val s_ready :: s_check_l0 :: s_request_top_level :: s_wait_top_level :: s_request_second_level :: s_wait_second_level :: Nil = Enum(6)
+  // - ready: idle, waiting for a miss.
+  // - request_ht_directory: read cache, or issue a request for the HT directory entry
+  // - wait_ht_directory: wait for the HT directory entry to return
+  // - request_ht_entry: read cache, or issue a request for the HT entry
+  // - wait_ht_entry: wait for the HT entry to return. Refill when done.
+  val s_ready :: s_request_ht_directory :: s_wait_ht_directory :: s_request_ht_entry :: s_wait_ht_entry :: Nil = Enum(5)
   val state = RegInit(s_ready)
   val next_state = WireDefault(state)
 
@@ -205,8 +227,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   midas.targetutils.PerfCounter(state =/= s_ready, "htlb_waiting", "htlb_waiting")
 
 
-  timeline.trackState("htlb.access", "miss", io.req(0).fire && hm_enabled && htlb_miss)
-  timeline.trackState("htlb.access", "hit", io.req(0).fire && hm_enabled && htlb_hit)
 
   val mem_resp_valid = io.mem.resp.valid
   val mem_resp_data = io.mem.resp.bits.data
@@ -215,19 +235,19 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   // Adapted from HTW.scala
   val entries_per_ht_bits = 18
   // We assume boomParams.enableTwoStageHTW is true for this simplified version with 2-stage
-  val top_level_cache_size = boomParams.HTWCacheSize
+  val ht_directory_cache_size = boomParams.HTWCacheSize
   def getIndex(hid: UInt) =
-    (hid >> entries_per_ht_bits)(log2Ceil(top_level_cache_size) - 1, 0)
+    (hid >> entries_per_ht_bits)(log2Ceil(ht_directory_cache_size) - 1, 0)
   def getTag(hid: UInt) = (hid >> entries_per_ht_bits)(
     handleBits - 19,
-    log2Ceil(top_level_cache_size)
+    log2Ceil(ht_directory_cache_size)
   )
-  val top_level_cache =
+  val ht_directory_cache =
     if (boomParams.enableTwoStageHTW)
       Some(
         RegInit(
           VecInit(
-            Seq.fill(top_level_cache_size)(0.U.asTypeOf(new TopLevelCacheEntry))
+            Seq.fill(ht_directory_cache_size)(0.U.asTypeOf(new TopLevelCacheEntry))
           )
         )
       )
@@ -269,16 +289,31 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   // FSM Implementation
   state := Mux(io.htlb_enabled, next_state, s_ready)
 
+  val refilling = RegInit(false.B)
+  refilling := next_state === s_request_ht_directory || next_state === s_wait_ht_directory || next_state === s_request_ht_entry || next_state === s_wait_ht_entry
+
+  io.refilling.valid := refilling
+  io.refilling.bits := hid
+
+
+  // timeline.trackStateValue("htlb.access", "miss", hid, io.req(0).fire && hm_enabled && htlb_miss)
+  // timeline.trackStateValue("htlb.access", "hit", hid, io.req(0).fire && hm_enabled && htlb_hit)
+  // timeline.trackStateValue("htlb.access", "refilling", hid, refilling)
+  // timeline.trackState("htlb.access", "refilling", refilling)
+  // timeline.trackState("htlb.access", "not ready", state =/= s_ready)
 
   // timeline.trackState("htlb", "ready", state === s_ready)
-  timeline.trackState("htlb.state", "check_l0", state === s_check_l0)
-  timeline.trackState("htlb.state", "request_top_level", state === s_request_top_level)
-  timeline.trackState("htlb.state", "wait_top_level", state === s_wait_top_level)
-  timeline.trackState("htlb.state", "request_second_level", state === s_request_second_level)
-  timeline.trackState("htlb.state", "wait_second_level", state === s_wait_second_level)
+  timeline.trackState("htlb.state", "request_ht_directory", state === s_request_ht_directory)
+  timeline.trackState("htlb.state", "wait_ht_directory", state === s_wait_ht_directory)
+  timeline.trackState("htlb.state", "request_ht_entry", state === s_request_ht_entry)
+  timeline.trackState("htlb.state", "wait_ht_entry", state === s_wait_ht_entry)
 
   timeline.trackState("htlb.state", "mem_req", io.mem.req.valid)
   timeline.trackState("htlb.state", "mem_resp", io.mem.resp.valid)
+  timeline.trackState("htlb.state", "retry_nack", io.mem.s2_nack)
+
+
+  // timeline.trackStateValue("htlb.access", "missed on", io.refill_hid, io.refill_valid)
 
 
   for (s <- 0 until cfg.nSets) {
@@ -287,7 +322,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       timeline.trackState(s"htlb.s${s}w${w}", "invalid", !e.valid, e.tag)
     }
   }
-
 
   switch(state) {
 
@@ -300,7 +334,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
         
         if (boomParams.enableTwoStageHTW) {
           // Check L0 cache immediately.
-          val cache = top_level_cache.get
+          val cache = ht_directory_cache.get
           // Must use 'hid' (current input) not 'hid_req' (stored register) for immediate lookup
           val l0_idx = getIndex(hid)
           val l0_tag = getTag(hid)
@@ -315,9 +349,9 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
             io.mem.req.valid := true.B
             
             when (io.mem.req.fire) {
-               next_state := s_wait_second_level
+               next_state := s_wait_ht_entry
             } .otherwise {
-               next_state := s_request_second_level
+               next_state := s_request_ht_entry
             }
           }.otherwise {
             // Fast Path: Request Top Level immediately
@@ -326,9 +360,9 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
             io.mem.req.valid := true.B
             
             when (io.mem.req.fire) {
-               next_state := s_wait_top_level
+               next_state := s_wait_ht_directory
             } .otherwise {
-               next_state := s_request_top_level
+               next_state := s_request_ht_directory
             }
           }
         } else {
@@ -337,16 +371,16 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           io.mem.req.valid := true.B
           
           when (io.mem.req.fire) {
-             next_state := s_wait_second_level
+             next_state := s_wait_ht_entry
           } .otherwise {
-             next_state := s_request_second_level
+             next_state := s_request_ht_entry
           }
         }
       }
     }
 
 
-    is(s_request_top_level) {
+    is(s_request_ht_directory) {
       if (boomParams.enableTwoStageHTW) {
         // Request L0 entry from memory
         // Addr = htBase + (hid >> 18) * 8
@@ -355,19 +389,19 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
         // Only advance state if the request actually fired
         when(io.mem.req.fire) {
-          next_state := s_wait_top_level
+          next_state := s_wait_ht_directory
         }
       }
     }
 
 
 
-    is(s_wait_top_level) {
+    is(s_wait_ht_directory) {
       if (boomParams.enableTwoStageHTW) {
         // Wait for outer walk response
         when(mem_resp_valid) {
           // Update L0 Cache
-          val cache = top_level_cache.get
+          val cache = ht_directory_cache.get
           val fill_idx = getIndex(hid_req)
           cache(fill_idx).valid := true.B
           cache(fill_idx).tag := getTag(hid_req)
@@ -381,20 +415,20 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           io.mem.req.valid := true.B
 
           when (io.mem.req.fire) {
-             next_state := s_wait_second_level
+             next_state := s_wait_ht_entry
           } .otherwise {
-             next_state := s_request_second_level
+             next_state := s_request_ht_entry
           }
 
         }.elsewhen(io.mem.s2_nack) {
-          next_state := s_request_top_level
+          next_state := s_request_ht_directory
         }
       }
     }
 
 
 
-    is(s_request_second_level) {
+    is(s_request_ht_entry) {
       // Request Inner Entry (HTE)
       // Addr = inner_walk_base + (hid & mask) * 8
       // mask for 18 bits = (1 << 18) - 1
@@ -410,16 +444,14 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       io.mem.req.valid := true.B
 
       when(io.mem.req.fire) {
-        next_state := s_wait_second_level
+        next_state := s_wait_ht_entry
       }
     }
 
 
 
-    is(s_wait_second_level) {
+    is(s_wait_ht_entry) {
       when(mem_resp_valid) {
-        timeline.mark("htlb.state", "observe_mem_resp")
-
         // Insert into L1 entries at valid hid_req
         // No victim handling needed for simplificaiton, just overwrite
         val newEntry = Wire(new HTLBEntryData)
@@ -449,8 +481,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
         next_state := s_ready
 
       }.elsewhen(io.mem.s2_nack) {
-        timeline.mark("htlb.state", "retry_nack")
-        next_state := s_request_second_level
+        next_state := s_request_ht_entry
       }
     }
 
@@ -550,7 +581,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   // Reset
   when(reset.asBool || io.clear_htlb) {
     entries.foreach(_.foreach(_.invalidate()))
-    top_level_cache.foreach(_.foreach(_.valid := false.B))
+    ht_directory_cache.foreach(_.foreach(_.valid := false.B))
   }
 
   // Invalidation
@@ -558,7 +589,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     // Invalidate L1
     when(io.htInval === ((BigInt(1) << handleBits) - 1).U) {
       entries.foreach(_.foreach(_.invalidate()))
-      top_level_cache.foreach(_.foreach(_.valid := false.B))
+      ht_directory_cache.foreach(_.foreach(_.valid := false.B))
     }.otherwise {
       val (e_tag, e_idx) = Split(io.htInval, idxBits)
       for (e <- entries(e_idx)) {
@@ -570,7 +601,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       if (boomParams.enableTwoStageHTW) {
         val l0_idx = getIndex(io.htInval)
         val l0_tag = getTag(io.htInval)
-        val cache = top_level_cache.get
+        val cache = ht_directory_cache.get
         when(cache(l0_idx).valid && cache(l0_idx).tag === l0_tag) {
           cache(l0_idx).valid := false.B
         }
