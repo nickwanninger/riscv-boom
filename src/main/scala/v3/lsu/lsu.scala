@@ -748,10 +748,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     will_fire_sfence        (w) := lsu_sched("E sfence",        can_fire_sfence        (w) , true , true, false, false, true)  // TLB ,    ,      , ROB
     will_fire_release       (w) := lsu_sched("F release",       can_fire_release       (w) , false, false, false, true , false) //            LCAM
 
-    // timeline.trackState("lsu_hella_blocked", "tlb", can_fire_hella_incoming(w) &&  !tlb_avail)
-    // timeline.trackState("lsu_hella_blocked", "dc", can_fire_hella_incoming(w) &&  !dc_avail)
-
     will_fire_hella_incoming(w) := lsu_sched("G hella_incoming",can_fire_hella_incoming(w) , false /* ?? */ , true, true , false, false) // TLB , DC
+
     will_fire_hella_wakeup  (w) := lsu_sched("H hella_wakeup",  can_fire_hella_wakeup  (w) , false, false, true , false, false) //     , DC
     will_fire_load_retry    (w) := lsu_sched("I load_retry",    can_fire_load_retry    (w) , true , true, true , true , false) // TLB , DC , LCAM
     will_fire_sta_retry     (w) := lsu_sched("J sta_retry",     can_fire_sta_retry     (w) , true , true, false, true , true)  // TLB ,    , LCAM , ROB // TODO: This should be higher priority
@@ -841,6 +839,15 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                     Mux(will_fire_sta_retry     (w)  , stq_retry_e.bits.is_handle,
                     Mux(will_fire_hella_incoming(w)  , false.B,
                                                        false.B))))))
+
+
+  val exe_handle_id = widthMap(w => exe_htlb_vaddr(w)(xLen-2, handleOffsetBits))
+  val exe_handle_nonsense_miss = widthMap(w => WireInit(false.B))
+  for (w <- 0 until memWidth) {
+    when (will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w)) {
+      exe_handle_nonsense_miss(w) := exe_is_handle(w) && htlb.io.refilling.valid && (exe_handle_id(w) === htlb.io.refilling.bits)
+    }
+  }
 
   val exe_sfence = WireInit((0.U).asTypeOf(Valid(new rocket.SFenceReq)))
   for (w <- 0 until memWidth) {
@@ -1908,6 +1915,9 @@ midas.targetutils.PerfCounter(
     } .elsewhen (will_fire_hella_incoming(memWidth-1) && dmem_req_fire(memWidth-1)) {
       // printf("[LSU] HellaCache S1 fired\n")
       hella_state := h_s2
+    } .elsewhen (exe_handle_nonsense_miss(memWidth-1)) {
+      timeline.mark("hella", "s1_nonsense_miss")
+      hella_state := h_s2_nack
     } .otherwise {
       hella_state := h_s2_nack
     }
