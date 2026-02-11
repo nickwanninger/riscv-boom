@@ -21,15 +21,15 @@ class TimelineTracker() {
   cycle := cycle + 1.U
 
   def start(thread: String, event: String): Unit = {
-    midas.targetutils.SynthesizePrintf(printf(s"TL(S,$thread,$event,%d)\n", cycle))
+    // midas.targetutils.SynthesizePrintf(printf(s"TL(S,$thread,$event,%d)\n", cycle))
   }
 
   def end(thread: String, event: String): Unit = {
-    midas.targetutils.SynthesizePrintf(printf(s"TL(E,$thread,$event,%d)\n", cycle))
+    // midas.targetutils.SynthesizePrintf(printf(s"TL(E,$thread,$event,%d)\n", cycle))
   }
 
   def mark(thread: String, event: String): Unit = {
-    midas.targetutils.SynthesizePrintf(printf(s"TL(M,$thread,$event,%d)\n", cycle))
+    // midas.targetutils.SynthesizePrintf(printf(s"TL(M,$thread,$event,%d)\n", cycle))
   }
 
   def trackStateValue(thread: String, stateName: String, stateValue: UInt, sig: Bool): Unit = {
@@ -43,7 +43,7 @@ class TimelineTracker() {
     }
     when(!sig && prev) {
       // emit a timeline bound
-      midas.targetutils.SynthesizePrintf(printf(s"TL(B,$thread,$stateName %x,%d,%d,0)\n", valueAtStart, cycle, startCycle))
+      // midas.targetutils.SynthesizePrintf(printf(s"TL(B,$thread,$stateName %x,%d,%d,0)\n", valueAtStart, cycle, startCycle))
     }
   }
 
@@ -56,14 +56,14 @@ class TimelineTracker() {
     }
     when(!sig && prev) {
       // emit a timeline bound
-      midas.targetutils.SynthesizePrintf(printf(s"TL(B,$thread,$event,%d,%d,%d)\n", cycle, startCycle, value))
+      // midas.targetutils.SynthesizePrintf(printf(s"TL(B,$thread,$event,%d,%d,%d)\n", cycle, startCycle, value))
     }
   }
 
   def trackCounter(thread: String, count: UInt): Unit = {
     val prev = RegNext(count, 0.U)
     when(count =/= prev) {
-      midas.targetutils.SynthesizePrintf(printf(s"TL(C,$thread,%d,%d)\n", cycle, count))
+      // midas.targetutils.SynthesizePrintf(printf(s"TL(C,$thread,%d,%d)\n", cycle, count))
     }
   }
 }
