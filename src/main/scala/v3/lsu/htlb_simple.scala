@@ -323,6 +323,8 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     }
   }
 
+  midas.targetutils.SynthesizePrintf(printf(s"htlb state %d\n", state))
+
   switch(state) {
 
 
