@@ -728,8 +728,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       rob_avail  = rob_avail  && !(will_fire && uses_rob.B)
       dontTouch(will_fire) // dontTouch these so we can inspect the will_fire signals
 
-      timeline.trackState("lsu_sched_decisions." + name, "blocked", can_fire && !will_fire)
-      timeline.trackState("lsu_sched_decisions." + name, "fired", can_fire && will_fire)
+      // timeline.trackState("lsu_sched_decisions." + name, "blocked", can_fire && !will_fire)
+      // timeline.trackState("lsu_sched_decisions." + name, "fired", can_fire && will_fire)
 
       will_fire
     }
@@ -760,24 +760,24 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         will_fire_load_incoming(w), will_fire_stad_incoming(w), will_fire_sta_incoming(w), will_fire_std_incoming(w), will_fire_sfence(w), will_fire_release(w), will_fire_hella_incoming(w), will_fire_hella_wakeup(w), will_fire_load_retry(w), will_fire_sta_retry(w), will_fire_load_wakeup(w), will_fire_store_commit(w)))
     }
 
-    timeline.trackState("lsu_sched." + w, "will_fire_load_incoming",  will_fire_load_incoming(w))
-    timeline.trackState("lsu_sched." + w, "will_fire_stad_incoming",  will_fire_stad_incoming(w))
-    timeline.trackState("lsu_sched." + w, "will_fire_sta_incoming",   will_fire_sta_incoming(w))
-    timeline.trackState("lsu_sched." + w, "will_fire_std_incoming",   will_fire_std_incoming(w))
-    timeline.trackState("lsu_sched." + w, "will_fire_sfence",         will_fire_sfence(w))
-    timeline.trackState("lsu_sched." + w, "will_fire_release",        will_fire_release(w))
-    timeline.trackState("lsu_sched." + w, "will_fire_hella_incoming", will_fire_hella_incoming(w))
-    timeline.trackState("lsu_sched." + w, "will_fire_hella_wakeup",   will_fire_hella_wakeup(w))
-    timeline.trackState("lsu_sched." + w, "will_fire_load_retry",     will_fire_load_retry(w))
-    timeline.trackState("lsu_sched." + w, "will_fire_sta_retry",      will_fire_sta_retry(w))
-    timeline.trackState("lsu_sched." + w, "will_fire_load_wakeup",    will_fire_load_wakeup(w))
-    timeline.trackState("lsu_sched." + w, "will_fire_store_commit",   will_fire_store_commit(w))
+    // timeline.trackState("lsu_sched." + w, "will_fire_load_incoming",  will_fire_load_incoming(w))
+    // timeline.trackState("lsu_sched." + w, "will_fire_stad_incoming",  will_fire_stad_incoming(w))
+    // timeline.trackState("lsu_sched." + w, "will_fire_sta_incoming",   will_fire_sta_incoming(w))
+    // timeline.trackState("lsu_sched." + w, "will_fire_std_incoming",   will_fire_std_incoming(w))
+    // timeline.trackState("lsu_sched." + w, "will_fire_sfence",         will_fire_sfence(w))
+    // timeline.trackState("lsu_sched." + w, "will_fire_release",        will_fire_release(w))
+    // timeline.trackState("lsu_sched." + w, "will_fire_hella_incoming", will_fire_hella_incoming(w))
+    // timeline.trackState("lsu_sched." + w, "will_fire_hella_wakeup",   will_fire_hella_wakeup(w))
+    // timeline.trackState("lsu_sched." + w, "will_fire_load_retry",     will_fire_load_retry(w))
+    // timeline.trackState("lsu_sched." + w, "will_fire_sta_retry",      will_fire_sta_retry(w))
+    // timeline.trackState("lsu_sched." + w, "will_fire_load_wakeup",    will_fire_load_wakeup(w))
+    // timeline.trackState("lsu_sched." + w, "will_fire_store_commit",   will_fire_store_commit(w))
 
-    timeline.trackState("lsu_sched.htlb" + w, "htlb", htlb_avail)
-    timeline.trackState("lsu_sched.tlb" + w, "tlb", tlb_avail)
-    timeline.trackState("lsu_sched.lcam" + w, "lcam", lcam_avail)
-    timeline.trackState("lsu_sched.dc" + w, "dc", dc_avail)
-    timeline.trackState("lsu_sched.rob" + w, "rob", rob_avail)
+    // timeline.trackState("lsu_sched.htlb" + w, "htlb", htlb_avail)
+    // timeline.trackState("lsu_sched.tlb" + w, "tlb", tlb_avail)
+    // timeline.trackState("lsu_sched.lcam" + w, "lcam", lcam_avail)
+    // timeline.trackState("lsu_sched.dc" + w, "dc", dc_avail)
+    // timeline.trackState("lsu_sched.rob" + w, "rob", rob_avail)
 
 
     assert(!(exe_req(w).valid && !(will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w) || will_fire_std_incoming(w) || will_fire_sfence(w))))
@@ -842,12 +842,12 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
 
   val exe_handle_id = widthMap(w => exe_htlb_vaddr(w)(xLen-2, handleOffsetBits))
-  val exe_handle_nonsense_miss = widthMap(w => WireInit(false.B))
-  for (w <- 0 until memWidth) {
-    when (will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w)) {
-      exe_handle_nonsense_miss(w) := exe_is_handle(w) && htlb.io.refilling.valid && (exe_handle_id(w) === htlb.io.refilling.bits)
-    }
-  }
+  // val exe_handle_nonsense_miss = widthMap(w => WireInit(false.B))
+  // for (w <- 0 until memWidth) {
+  //   when (will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w)) {
+  //     exe_handle_nonsense_miss(w) := exe_is_handle(w) && htlb.io.refilling.valid && (exe_handle_id(w) === htlb.io.refilling.bits)
+  //   }
+  // }
 
   val exe_sfence = WireInit((0.U).asTypeOf(Valid(new rocket.SFenceReq)))
   for (w <- 0 until memWidth) {
@@ -892,7 +892,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   // htlb.io.pht_enabled := ENABLE_PHT.B
   htlb.io.pht_enabled := true.B
 
-  timeline.trackStateValue("lsu_sched.htlb", "refilling", htlb.io.refilling.bits, htlb.io.refilling.valid)
+  // XXX: io.refilling disabled on htlb - see htlb_simple.scala
+  // timeline.trackStateValue("lsu_sched.htlb", "refilling", htlb.io.refilling.bits, htlb.io.refilling.valid)
 
   val is_incoming = widthMap(w => will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w))
 
@@ -1915,9 +1916,6 @@ midas.targetutils.PerfCounter(
     } .elsewhen (will_fire_hella_incoming(memWidth-1) && dmem_req_fire(memWidth-1)) {
       // printf("[LSU] HellaCache S1 fired\n")
       hella_state := h_s2
-    } .elsewhen (exe_handle_nonsense_miss(memWidth-1)) {
-      timeline.mark("hella", "s1_nonsense_miss")
-      hella_state := h_s2_nack
     } .otherwise {
       hella_state := h_s2_nack
     }

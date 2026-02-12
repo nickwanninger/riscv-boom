@@ -119,7 +119,9 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     val htlb_enabled = Input(Bool())
     val pht_enabled = Input(Bool())
 
-    val refilling = Valid(UInt(handleBits.W))
+    // XXX: refilling was used to detect nonsense misses in the LSU, may cause
+    //      combinational loops in FireSim's token model. Disabled for now.
+    // val refilling = Valid(UInt(handleBits.W))
   })
 
   // ------------------------------------------------------------------------------------------------
@@ -174,6 +176,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     }
   }
 
+  val twoStageHTW = boomParams.enableTwoStageHTW
   val fastPathEnabled = false
 
   val timeline = new TimelineTracker()
@@ -233,7 +236,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   val mem_resp_valid = io.mem.resp.valid
   val mem_resp_data = io.mem.resp.bits.data
 
-  val twoStageHTW = false // boomParams.enableTwoStageHTW
   // HTW: L0 Cache (Top Level Cache) Setup
   // Adapted from HTW.scala
   val entries_per_ht_bits = 18
@@ -292,11 +294,11 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   // FSM Implementation
   state := Mux(io.htlb_enabled, next_state, s_ready)
 
-  val refilling = RegInit(false.B)
-  refilling := next_state === s_request_ht_directory || next_state === s_wait_ht_directory || next_state === s_request_ht_entry || next_state === s_wait_ht_entry
-
-  io.refilling.valid := refilling
-  io.refilling.bits := hid
+  // XXX: see io.refilling comment above - disabled to avoid potential combinational loop in FireSim.
+  // val refilling = RegInit(false.B)
+  // refilling := next_state === s_request_ht_directory || next_state === s_wait_ht_directory || next_state === s_request_ht_entry || next_state === s_wait_ht_entry
+  // io.refilling.valid := refilling
+  // io.refilling.bits := hid
 
 
   // timeline.trackStateValue("htlb.access", "miss", hid, io.req(0).fire && hm_enabled && htlb_miss)
