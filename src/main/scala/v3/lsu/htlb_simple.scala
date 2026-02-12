@@ -17,8 +17,8 @@ import freechips.rocketchip.tilelink.TLMessages.d
 
 
 class TimelineTracker() {
-  val cycle = RegInit(0.U(64.W))
-  cycle := cycle + 1.U
+  // val cycle = RegInit(0.U(64.W))
+  // cycle := cycle + 1.U
 
   def start(thread: String, event: String): Unit = {
     // midas.targetutils.SynthesizePrintf(printf(s"TL(S,$thread,$event,%d)\n", cycle))
@@ -33,38 +33,38 @@ class TimelineTracker() {
   }
 
   def trackStateValue(thread: String, stateName: String, stateValue: UInt, sig: Bool): Unit = {
-    val startCycle = RegInit(0.U(64.W))
-    val prev = RegNext(sig, false.B)
-    val valueAtStart = RegInit(0.U(stateValue.getWidth.W))
+    // val startCycle = RegInit(0.U(64.W))
+    // val prev = RegNext(sig, false.B)
+    // val valueAtStart = RegInit(0.U(stateValue.getWidth.W))
 
-    when(sig && !prev) {
-      startCycle := cycle
-      valueAtStart := stateValue
-    }
-    when(!sig && prev) {
-      // emit a timeline bound
-      // midas.targetutils.SynthesizePrintf(printf(s"TL(B,$thread,$stateName %x,%d,%d,0)\n", valueAtStart, cycle, startCycle))
-    }
+    // when(sig && !prev) {
+    //   startCycle := cycle
+    //   valueAtStart := stateValue
+    // }
+    // when(!sig && prev) {
+    //   // emit a timeline bound
+    //   midas.targetutils.SynthesizePrintf(printf(s"TL(B,$thread,$stateName %x,%d,%d,0)\n", valueAtStart, cycle, startCycle))
+    // }
   }
 
   def trackState(thread: String, event: String, sig: Bool, value: UInt = 0.U): Unit = {
-    val startCycle = RegInit(0.U(64.W))
-    val prev = RegNext(sig, false.B)
+    // val startCycle = RegInit(0.U(64.W))
+    // val prev = RegNext(sig, false.B)
 
-    when(sig && !prev) {
-      startCycle := cycle
-    }
-    when(!sig && prev) {
-      // emit a timeline bound
-      // midas.targetutils.SynthesizePrintf(printf(s"TL(B,$thread,$event,%d,%d,%d)\n", cycle, startCycle, value))
-    }
+    // when(sig && !prev) {
+    //   startCycle := cycle
+    // }
+    // when(!sig && prev) {
+    //   // emit a timeline bound
+    //   midas.targetutils.SynthesizePrintf(printf(s"TL(B,$thread,$event,%d,%d,%d)\n", cycle, startCycle, value))
+    // }
   }
 
   def trackCounter(thread: String, count: UInt): Unit = {
-    val prev = RegNext(count, 0.U)
-    when(count =/= prev) {
-      // midas.targetutils.SynthesizePrintf(printf(s"TL(C,$thread,%d,%d)\n", cycle, count))
-    }
+    // val prev = RegNext(count, 0.U)
+    // when(count =/= prev) {
+    //   midas.targetutils.SynthesizePrintf(printf(s"TL(C,$thread,%d,%d)\n", cycle, count))
+    // }
   }
 }
 
@@ -324,7 +324,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     }
   }
 
-  midas.targetutils.SynthesizePrintf(printf(s"htlb state %d\n", state))
 
   switch(state) {
 
@@ -572,9 +571,9 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     val (paddr_hid_tag, paddr_hid_set) = Split(io.tlb(0).bits.hid, idxBits)
     val hitVecPAddr = entries(paddr_hid_set).map(_.hit(paddr_hid_tag))
     if (boomParams.enableStateTracing) {
-      midas.targetutils.SynthesizePrintf(
-        printf("Ht:%d,%x\n", io.tlb(0).bits.hid, io.tlb(0).bits.paddr)
-      )
+      // midas.targetutils.SynthesizePrintf(
+      //   printf("Ht:%d,%x\n", io.tlb(0).bits.hid, io.tlb(0).bits.paddr)
+      // )
     }
     entries(paddr_hid_set)(OHToUInt(hitVecPAddr)).set_paddr(
       io.tlb(0).bits.paddr

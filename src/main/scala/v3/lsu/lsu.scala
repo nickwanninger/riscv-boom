@@ -1040,16 +1040,16 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)(xLen-2, handleOffsetBits)
     htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w) - exe_htlb_vaddr(w)(handleBits - 1, 0)
 
-    when (htlb.io.tlb(w).valid) {
-      // midas.targetutils.SynthesizePrintf(printf("htDebug:%x,%x,%d,%d,%d\n", exe_tlb_paddr(w), exe_tlb_vaddr(w), paddr_valid, small_handle_criterium(w), dtlb.io.req(w).valid))
-      midas.targetutils.SynthesizePrintf(printf("htDebug:%x,%x,%x,%x,%d,%d\n", exe_tlb_paddr(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits), exe_tlb_vaddr(w)(paddrBits-1, corePgIdxBits), small_handle_criterium(w), dtlb.io.req(w).valid))
-      midas.targetutils.SynthesizePrintf(printf("ht:%d,%x,%x\n", htlb.io.tlb(w).valid, htlb.io.tlb(w).bits.hid, htlb.io.tlb(w).bits.paddr))
-    }
+    // when (htlb.io.tlb(w).valid) {
+    //   // midas.targetutils.SynthesizePrintf(printf("htDebug:%x,%x,%d,%d,%d\n", exe_tlb_paddr(w), exe_tlb_vaddr(w), paddr_valid, small_handle_criterium(w), dtlb.io.req(w).valid))
+    //   midas.targetutils.SynthesizePrintf(printf("htDebug:%x,%x,%x,%x,%d,%d\n", exe_tlb_paddr(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits), exe_tlb_vaddr(w)(paddrBits-1, corePgIdxBits), small_handle_criterium(w), dtlb.io.req(w).valid))
+    //   midas.targetutils.SynthesizePrintf(printf("ht:%d,%x,%x\n", htlb.io.tlb(w).valid, htlb.io.tlb(w).bits.hid, htlb.io.tlb(w).bits.paddr))
+    // }
 
     when (mem_xcpt_valids(w))
     {
       when (htlb_enabled) {
-        midas.targetutils.SynthesizePrintf(printf("Te:%x,%x\n", exe_tlb_vaddr(w), exe_tlb_paddr(w)))
+        // midas.targetutils.SynthesizePrintf(printf("Te:%x,%x\n", exe_tlb_vaddr(w), exe_tlb_paddr(w)))
       }
       assert(RegNext(will_fire_load_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_incoming(w) ||
         will_fire_load_retry(w) || will_fire_sta_retry(w)))
