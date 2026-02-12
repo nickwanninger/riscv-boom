@@ -231,10 +231,11 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   val mem_resp_valid = io.mem.resp.valid
   val mem_resp_data = io.mem.resp.bits.data
 
+  val twoStageHTW = false // boomParams.enableTwoStageHTW
   // HTW: L0 Cache (Top Level Cache) Setup
   // Adapted from HTW.scala
   val entries_per_ht_bits = 18
-  // We assume boomParams.enableTwoStageHTW is true for this simplified version with 2-stage
+  // We assume twoStageHTW is true for this simplified version with 2-stage
   val ht_directory_cache_size = boomParams.HTWCacheSize
   def getIndex(hid: UInt) =
     (hid >> entries_per_ht_bits)(log2Ceil(ht_directory_cache_size) - 1, 0)
@@ -243,7 +244,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     log2Ceil(ht_directory_cache_size)
   )
   val ht_directory_cache =
-    if (boomParams.enableTwoStageHTW)
+    if (twoStageHTW)
       Some(
         RegInit(
           VecInit(
@@ -334,7 +335,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       when(io.req(0).fire && htlb_miss) {
         hid_req := hid
         
-        if (boomParams.enableTwoStageHTW) {
+        if (twoStageHTW) {
           // Check L0 cache immediately.
           val cache = ht_directory_cache.get
           // Must use 'hid' (current input) not 'hid_req' (stored register) for immediate lookup
@@ -383,7 +384,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
 
     is(s_request_ht_directory) {
-      if (boomParams.enableTwoStageHTW) {
+      if (twoStageHTW) {
         // Request L0 entry from memory
         // Addr = htBase + (hid >> 18) * 8
         walk_addr := io.htBase + (hid_req >> entries_per_ht_bits) * 8.U
@@ -399,7 +400,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
 
     is(s_wait_ht_directory) {
-      if (boomParams.enableTwoStageHTW) {
+      if (twoStageHTW) {
         // Wait for outer walk response
         when(mem_resp_valid) {
           // Update L0 Cache
@@ -434,7 +435,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       // Request Inner Entry (HTE)
       // Addr = inner_walk_base + (hid & mask) * 8
       // mask for 18 bits = (1 << 18) - 1
-      if (boomParams.enableTwoStageHTW) {
+      if (twoStageHTW) {
         walk_addr := inner_walk_base + (hid_req(
           entries_per_ht_bits - 1,
           0
@@ -600,7 +601,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
         }
       }
 
-      if (boomParams.enableTwoStageHTW) {
+      if (twoStageHTW) {
         val l0_idx = getIndex(io.htInval)
         val l0_tag = getTag(io.htInval)
         val cache = ht_directory_cache.get
