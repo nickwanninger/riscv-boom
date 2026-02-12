@@ -174,6 +174,8 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     }
   }
 
+  val fastPathEnabled = false
+
   val timeline = new TimelineTracker()
 
   // Utilities
@@ -334,48 +336,63 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       when(io.req(0).fire && htlb_miss) {
         hid_req := hid
         
-        if (twoStageHTW) {
-          // Check L0 cache immediately.
-          val cache = ht_directory_cache.get
-          // Must use 'hid' (current input) not 'hid_req' (stored register) for immediate lookup
-          val l0_idx = getIndex(hid)
-          val l0_tag = getTag(hid)
-          val l0_entry = cache(l0_idx)
-          val l0_hit = l0_entry.valid && l0_entry.tag === l0_tag
+        if (fastPathEnabled) {
+          // Fast path: attempt to fire the memory request immediately from s_ready,
+          // skipping the request state if it succeeds.
+          if (twoStageHTW) {
+            val cache = ht_directory_cache.get
+            val l0_idx = getIndex(hid)
+            val l0_tag = getTag(hid)
+            val l0_entry = cache(l0_idx)
+            val l0_hit = l0_entry.valid && l0_entry.tag === l0_tag
 
-          when(l0_hit) {
-            inner_walk_base := l0_entry.data
-            // Fast Path: Request Second Level immediately
-            // Addr = l0_entry.data + (hid & mask) * 8
-            walk_addr := l0_entry.data + (hid(entries_per_ht_bits - 1, 0)) * 8.U
-            io.mem.req.valid := true.B
-            
-            when (io.mem.req.fire) {
-               next_state := s_wait_ht_entry
-            } .otherwise {
-               next_state := s_request_ht_entry
+            when(l0_hit) {
+              inner_walk_base := l0_entry.data
+              walk_addr := l0_entry.data + (hid(entries_per_ht_bits - 1, 0)) * 8.U
+              io.mem.req.valid := true.B
+              when (io.mem.req.fire) {
+                next_state := s_wait_ht_entry
+              } .otherwise {
+                next_state := s_request_ht_entry
+              }
+            }.otherwise {
+              walk_addr := io.htBase + (hid >> entries_per_ht_bits) * 8.U
+              io.mem.req.valid := true.B
+              when (io.mem.req.fire) {
+                next_state := s_wait_ht_directory
+              } .otherwise {
+                next_state := s_request_ht_directory
+              }
             }
-          }.otherwise {
-            // Fast Path: Request Top Level immediately
-            // Addr = htBase + (hid >> entries_per_ht_bits) * 8
-            walk_addr := io.htBase + (hid >> entries_per_ht_bits) * 8.U
+          } else {
+            walk_addr := io.htBase + hid * 8.U
             io.mem.req.valid := true.B
-            
             when (io.mem.req.fire) {
-               next_state := s_wait_ht_directory
+              next_state := s_wait_ht_entry
             } .otherwise {
-               next_state := s_request_ht_directory
+              next_state := s_request_ht_entry
             }
           }
         } else {
-          // Single stage: Request immediately
-          walk_addr := io.htBase + hid * 8.U
-          io.mem.req.valid := true.B
-          
-          when (io.mem.req.fire) {
-             next_state := s_wait_ht_entry
-          } .otherwise {
-             next_state := s_request_ht_entry
+          // Slow path: always pass through the request state.
+          if (twoStageHTW) {
+            val cache = ht_directory_cache.get
+            val l0_idx = getIndex(hid)
+            val l0_tag = getTag(hid)
+            val l0_entry = cache(l0_idx)
+            val l0_hit = l0_entry.valid && l0_entry.tag === l0_tag
+
+            when(l0_hit) {
+              inner_walk_base := l0_entry.data
+              walk_addr := l0_entry.data + (hid(entries_per_ht_bits - 1, 0)) * 8.U
+              next_state := s_request_ht_entry
+            }.otherwise {
+              walk_addr := io.htBase + (hid >> entries_per_ht_bits) * 8.U
+              next_state := s_request_ht_directory
+            }
+          } else {
+            walk_addr := io.htBase + hid * 8.U
+            next_state := s_request_ht_entry
           }
         }
       }
