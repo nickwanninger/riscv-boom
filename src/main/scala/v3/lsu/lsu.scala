@@ -969,8 +969,12 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val ae_ld = widthMap(w => dtlb.io.req(w).valid && dtlb.io.resp(w).ae.ld && exe_tlb_uop(w).uses_ldq)
   val ae_st = widthMap(w => dtlb.io.req(w).valid && dtlb.io.resp(w).ae.st && exe_tlb_uop(w).uses_stq)
 
-  when (htlb_enabled && is_handle.reduce(_||_) && dtlb.io.req(0).valid) {
-    midas.targetutils.SynthesizePrintf(printf("xcpt:%d,%d,%d,%d,%d,%d\n", pf_ld.reduce(_||_), pf_st.reduce(_||_), ae_ld.reduce(_||_), ae_st.reduce(_||_), ma_ld.reduce(_||_), ma_st.reduce(_||_)))
+  // XXX: SynthesizePrintf with live condition causes FireSim PrintBridge deadlock at cycle 3.
+  //      Gated behind enableStateTracing so it is dead code by default.
+  if (boomParams.enableStateTracing) {
+    when (htlb_enabled && is_handle.reduce(_||_) && dtlb.io.req(0).valid) {
+      midas.targetutils.SynthesizePrintf(printf("xcpt:%d,%d,%d,%d,%d,%d\n", pf_ld.reduce(_||_), pf_st.reduce(_||_), ae_ld.reduce(_||_), ae_st.reduce(_||_), ma_ld.reduce(_||_), ma_st.reduce(_||_)))
+    }
   }
 
   midas.targetutils.PerfCounter(widthMap(w => dtlb.io.req(w).valid && is_handle(w)).reduce(_ || _), "l1_dtlb_accesses_from_handle_translations", "l1_dtlb_accesses_from_handle_translations")
