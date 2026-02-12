@@ -168,7 +168,6 @@ class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
   val ptw   = new rocket.TLBPTWIO
   val core  = new LSUCoreIO
   val dmem  = new LSUDMemIO
-  val htw   = new HTLBHTWIO
 
   val hellacache = Flipped(new freechips.rocketchip.rocket.HellaCacheIO)
 
@@ -314,7 +313,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   )
 
   val htlb = Module(new HTLBSimple(HTLBConfig(boomParams.nL1HTLBSets, boomParams.nL1HTLBWays)))
-  io.htw <> htlb.io.htw
+  // XXX: old HTW removed - tie off htlb's htw port so inputs are driven
+  htlb.io.htw <> DontCare
   io.htlb_mem <> htlb.io.mem
   htlb.io.htDump <> io.core.htDump
   htlb.io.htInval <> io.core.htInval

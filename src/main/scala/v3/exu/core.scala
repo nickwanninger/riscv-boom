@@ -42,7 +42,6 @@ import freechips.rocketchip.devices.tilelink.{PLICConsts, CLINTConsts}
 import boom.v3.common._
 import boom.v3.ifu.{GlobalHistory, HasBoomFrontendParameters}
 import boom.v3.exu.FUConstants._
-import boom.v3.lsu.{DatapathHTWIO}
 import boom.v3.util._
 
 /**
@@ -56,7 +55,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     val interrupts = Input(new freechips.rocketchip.rocket.CoreInterrupts(false))
     val ifu = new boom.v3.ifu.BoomFrontendIO
     val ptw = Flipped(new freechips.rocketchip.rocket.DatapathPTWIO())
-    val htw = Flipped(new DatapathHTWIO())
     val rocc = Flipped(new freechips.rocketchip.tile.RoCCCoreIO())
     val lsu = Flipped(new boom.v3.lsu.LSUCoreIO)
     val ptw_tlb = new freechips.rocketchip.rocket.TLBPTWIO()
@@ -67,7 +65,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.ptw_tlb := DontCare
   io.ptw := DontCare
   io.ifu := DontCare
-  io.htw := DontCare
 
   //**********************************
   // construct all of the modules
@@ -269,10 +266,10 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       ("D$ release",  () => io.lsu.perf.release),
       ("ITLB miss",   () => io.ifu.perf.tlbMiss),
       ("DTLB miss",   () => io.lsu.perf.tlbMiss),
-      ("L2 TLB miss", () => io.ptw.perf.l2miss),
-      ("L1 HTLB miss", () => io.htw.perf.l1miss),
-      ("L2 HTLB miss", () => io.htw.perf.l2miss)))))
+      ("L2 TLB miss", () => io.ptw.perf.l2miss)))))
       // ("L1 TLB miss", () => io.ptw.perf.l1miss)))))
+      // ("L1 HTLB miss", () => io.htw.perf.l1miss),  // XXX: old HTW removed
+      // ("L2 HTLB miss", () => io.htw.perf.l2miss)
   val csr = Module(new freechips.rocketchip.rocket.CSRFile(perfEvents, boomParams.customCSRs.decls))
   csr.io.inst foreach { c => c := DontCare }
   csr.io.rocc_interrupt := io.rocc.interrupt
@@ -282,27 +279,17 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   custom_csrs.csrs.foreach { c => c.stall := false.B; c.set := false.B; c.sdata := DontCare }
 
   (custom_csrs.csrs zip csr.io.customCSRs).map { case (lhs, rhs) => lhs <> rhs }
-  io.htw.customCSRs <> custom_csrs
-
-  when (io.htw.htDumped && false.B) {
-    midas.targetutils.SynthesizePrintf(printf("[Core] HTLB Dumping Completed, interrupts should be re-enabled\n"))
-  }
-
-  when (io.htw.htInvald && false.B) {
-    midas.targetutils.SynthesizePrintf(printf("[Core] HTLBs Invalidation Completed\n"))
-  }
-
-  csr.io.customCSRs(2).set := io.htw.htDumped
+  // XXX: old HTW removed - customCSRs(2) (htDumped) and customCSRs(3) (htInvald) tied off
+  csr.io.customCSRs(2).set := false.B
   csr.io.customCSRs(2).sdata := 0.U
-  csr.io.clear_mie := Mux(csr.io.customCSRs(2).value.orR, ~io.htw.htDumped.orR, false.B)
+  csr.io.clear_mie := false.B
 
-  csr.io.customCSRs(3).set := io.htw.htInvald
+  csr.io.customCSRs(3).set := false.B
   csr.io.customCSRs(3).sdata := 0.U
 
   csr.io.customCSRs(5).set := io.lsu.perf.tlbMiss
   csr.io.customCSRs(5).sdata := csr.io.customCSRs(5).value + 1.U
 
-  io.htw.clear_htlb := csr.io.clear_htlb
   io.lsu.clear_htlb := csr.io.clear_htlb
 
   //val icache_blocked = !(io.ifu.fetchpacket.valid || RegNext(io.ifu.fetchpacket.valid))

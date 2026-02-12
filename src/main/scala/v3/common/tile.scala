@@ -233,12 +233,6 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer){
     core.io.rocc.interrupt := outer.roccs.map(_.module.io.interrupt).reduce(_||_)
   }
 
-  // HTW
-  val htw = Module(new HTW)
-  core.io.htw <> htw.io.dpath
-  htw.io.requestor <> lsu.io.htw
-  htw.io.mem +=: hellaCachePorts
-
   // PTW
   val ptw  = Module(new PTW(ptwPorts.length)(outer.dcache.node.edges.out(0), outer.p))
   core.io.ptw <> ptw.io.dpath
