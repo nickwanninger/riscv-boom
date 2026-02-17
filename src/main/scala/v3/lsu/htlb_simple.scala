@@ -178,7 +178,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   }
 
   val twoStageHTW = boomParams.enableTwoStageHTW
-  val fastPathEnabled = false
+  val fastPathEnabled = true
 
   val timeline = new TimelineTracker()
 
