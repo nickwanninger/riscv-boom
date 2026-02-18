@@ -290,12 +290,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       when(io.req(0).fire && htlb_miss) {
         hid_req := hid
 
-        if (boomParams.enableStateTracing) {
+        // if (boomParams.enableStateTracing) {
           midas.targetutils.SynthesizePrintf(
             printf("HTLB.miss: cycle=%d hid=0x%x htBase=0x%x\n",
               timeline.cycle, hid, io.htBase)
           )
-        }
+        // }
 
         if (twoStageHTW) {
           val cache = ht_directory_cache.get
@@ -309,12 +309,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
             walk_addr := l0_entry.data + (hid(entries_per_ht_bits - 1, 0)) * 8.U
             io.mem.req.valid := true.B
             when(io.mem.req.fire) {
-              if (boomParams.enableStateTracing) {
+              // if (boomParams.enableStateTracing) {
                 midas.targetutils.SynthesizePrintf(
                   printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x (L0 hit)\n",
                     timeline.cycle, hid, walk_addr)
                 )
-              }
+              // }
               next_state := s_wait_ht_entry
             }.otherwise {
               next_state := s_request_ht_entry
@@ -323,12 +323,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
             walk_addr := io.htBase + (hid >> entries_per_ht_bits) * 8.U
             io.mem.req.valid := true.B
             when(io.mem.req.fire) {
-              if (boomParams.enableStateTracing) {
+              // if (boomParams.enableStateTracing) {
                 midas.targetutils.SynthesizePrintf(
                   printf("HTLB.walk.dir: cycle=%d hid=0x%x addr=0x%x\n",
                     timeline.cycle, hid, walk_addr)
                 )
-              }
+              // }
               next_state := s_wait_ht_directory
             }.otherwise {
               next_state := s_request_ht_directory
@@ -338,12 +338,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           walk_addr := io.htBase + hid * 8.U
           io.mem.req.valid := true.B
           when(io.mem.req.fire) {
-            if (boomParams.enableStateTracing) {
+            // if (boomParams.enableStateTracing) {
               midas.targetutils.SynthesizePrintf(
                 printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
                   timeline.cycle, hid, walk_addr)
               )
-            }
+            // }
             next_state := s_wait_ht_entry
           }.otherwise {
             next_state := s_request_ht_entry
@@ -362,12 +362,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
         // Only advance state if the request actually fired
         when(io.mem.req.fire) {
-          if (boomParams.enableStateTracing) {
+          // if (boomParams.enableStateTracing) {
             midas.targetutils.SynthesizePrintf(
               printf("HTLB.walk.dir: cycle=%d hid=0x%x addr=0x%x\n",
                 timeline.cycle, hid_req, walk_addr)
             )
-          }
+          // }
           next_state := s_wait_ht_directory
         }
       }
@@ -394,12 +394,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           io.mem.req.valid := true.B
 
           when (io.mem.req.fire) {
-            if (boomParams.enableStateTracing) {
+            // if (boomParams.enableStateTracing) {
               midas.targetutils.SynthesizePrintf(
                 printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
                   timeline.cycle, hid_req, walk_addr)
               )
-            }
+            // }
             next_state := s_wait_ht_entry
           } .otherwise {
             next_state := s_request_ht_entry
@@ -431,12 +431,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       io.mem.req.valid := true.B
 
       when(io.mem.req.fire) {
-        if (boomParams.enableStateTracing) {
+        // if (boomParams.enableStateTracing) {
           midas.targetutils.SynthesizePrintf(
             printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
               timeline.cycle, hid_req, walk_addr)
           )
-        }
+        // }
         next_state := s_wait_ht_entry
       }
     }
