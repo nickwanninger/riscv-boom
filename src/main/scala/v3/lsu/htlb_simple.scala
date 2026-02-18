@@ -263,6 +263,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
   // FSM Implementation
   state := Mux(io.htlb_enabled, next_state, s_ready)
+  when(!io.htlb_enabled && state =/= s_ready) {
+    midas.targetutils.SynthesizePrintf(
+      printf("HTLB.disabled: cycle=%d state=%d flushed to s_ready\n",
+        timeline.cycle, state)
+    )
+  }
 
   timeline.trackState("htlb.state", "request_ht_directory", state === s_request_ht_directory)
   timeline.trackState("htlb.state", "wait_ht_directory", state === s_wait_ht_directory)
@@ -309,28 +315,32 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
             walk_addr := l0_entry.data + (hid(entries_per_ht_bits - 1, 0)) * 8.U
             io.mem.req.valid := true.B
             when(io.mem.req.fire) {
-              // if (boomParams.enableStateTracing) {
-                midas.targetutils.SynthesizePrintf(
-                  printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x (L0 hit)\n",
-                    timeline.cycle, hid, walk_addr)
-                )
-              // }
+              midas.targetutils.SynthesizePrintf(
+                printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x (L0 hit)\n",
+                  timeline.cycle, hid, walk_addr)
+              )
               next_state := s_wait_ht_entry
             }.otherwise {
+              midas.targetutils.SynthesizePrintf(
+                printf("HTLB.stall: cycle=%d hid=0x%x mem busy, L0 hit → s_request_ht_entry\n",
+                  timeline.cycle, hid)
+              )
               next_state := s_request_ht_entry
             }
           }.otherwise {
             walk_addr := io.htBase + (hid >> entries_per_ht_bits) * 8.U
             io.mem.req.valid := true.B
             when(io.mem.req.fire) {
-              // if (boomParams.enableStateTracing) {
-                midas.targetutils.SynthesizePrintf(
-                  printf("HTLB.walk.dir: cycle=%d hid=0x%x addr=0x%x\n",
-                    timeline.cycle, hid, walk_addr)
-                )
-              // }
+              midas.targetutils.SynthesizePrintf(
+                printf("HTLB.walk.dir: cycle=%d hid=0x%x addr=0x%x\n",
+                  timeline.cycle, hid, walk_addr)
+              )
               next_state := s_wait_ht_directory
             }.otherwise {
+              midas.targetutils.SynthesizePrintf(
+                printf("HTLB.stall: cycle=%d hid=0x%x mem busy, L0 miss → s_request_ht_directory\n",
+                  timeline.cycle, hid)
+              )
               next_state := s_request_ht_directory
             }
           }
@@ -338,14 +348,16 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           walk_addr := io.htBase + hid * 8.U
           io.mem.req.valid := true.B
           when(io.mem.req.fire) {
-            // if (boomParams.enableStateTracing) {
-              midas.targetutils.SynthesizePrintf(
-                printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
-                  timeline.cycle, hid, walk_addr)
-              )
-            // }
+            midas.targetutils.SynthesizePrintf(
+              printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
+                timeline.cycle, hid, walk_addr)
+            )
             next_state := s_wait_ht_entry
           }.otherwise {
+            midas.targetutils.SynthesizePrintf(
+              printf("HTLB.stall: cycle=%d hid=0x%x mem busy → s_request_ht_entry\n",
+                timeline.cycle, hid)
+            )
             next_state := s_request_ht_entry
           }
         }
@@ -379,6 +391,11 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       if (twoStageHTW) {
         // Wait for outer walk response
         when(mem_resp_valid) {
+          midas.targetutils.SynthesizePrintf(
+            printf("HTLB.dir_resp: cycle=%d hid=0x%x base=0x%x\n",
+              timeline.cycle, hid_req, mem_resp_data)
+          )
+
           // Update L0 Cache
           val cache = ht_directory_cache.get
           val fill_idx = getIndex(hid_req)
@@ -387,27 +404,37 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           cache(fill_idx).data := mem_resp_data
 
           inner_walk_base := mem_resp_data
-          
+
           // Fast Path: Request Second Level immediately
           // Addr = mem_resp_data + (hid_req & mask) * 8
           walk_addr := mem_resp_data + (hid_req(entries_per_ht_bits - 1, 0)) * 8.U
           io.mem.req.valid := true.B
 
           when (io.mem.req.fire) {
-            // if (boomParams.enableStateTracing) {
-              midas.targetutils.SynthesizePrintf(
-                printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
-                  timeline.cycle, hid_req, walk_addr)
-              )
-            // }
+            midas.targetutils.SynthesizePrintf(
+              printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
+                timeline.cycle, hid_req, walk_addr)
+            )
             next_state := s_wait_ht_entry
           } .otherwise {
+            midas.targetutils.SynthesizePrintf(
+              printf("HTLB.stall: cycle=%d hid=0x%x mem busy after dir_resp → s_request_ht_entry\n",
+                timeline.cycle, hid_req)
+            )
             next_state := s_request_ht_entry
           }
 
         }.elsewhen(io.mem.s2_nack) {
+          midas.targetutils.SynthesizePrintf(
+            printf("HTLB.nack: cycle=%d hid=0x%x in wait_ht_directory → s_request_ht_directory\n",
+              timeline.cycle, hid_req)
+          )
           next_state := s_request_ht_directory
         }.elsewhen(io.mem.s2_xcpt.asUInt.orR) {
+          midas.targetutils.SynthesizePrintf(
+            printf("HTLB.xcpt: cycle=%d hid=0x%x in wait_ht_directory → s_request_ht_directory\n",
+              timeline.cycle, hid_req)
+          )
           next_state := s_request_ht_directory
         }
       }
@@ -431,12 +458,10 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       io.mem.req.valid := true.B
 
       when(io.mem.req.fire) {
-        // if (boomParams.enableStateTracing) {
-          midas.targetutils.SynthesizePrintf(
-            printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
-              timeline.cycle, hid_req, walk_addr)
-          )
-        // }
+        midas.targetutils.SynthesizePrintf(
+          printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
+            timeline.cycle, hid_req, walk_addr)
+        )
         next_state := s_wait_ht_entry
       }
     }
@@ -468,11 +493,23 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
         entries(r_idx)(repl_way).insert(r_tag, newEntry)
 
+        midas.targetutils.SynthesizePrintf(
+          printf("HTLB.fill: cycle=%d hid=0x%x addr=0x%x phys=%d try_phys=%d → s_ready\n",
+            timeline.cycle, hid_req, newEntry.addr, newEntry.phys, newEntry.try_phys)
+        )
         next_state := s_ready
 
       }.elsewhen(io.mem.s2_nack) {
+        midas.targetutils.SynthesizePrintf(
+          printf("HTLB.nack: cycle=%d hid=0x%x in wait_ht_entry → s_request_ht_entry\n",
+            timeline.cycle, hid_req)
+        )
         next_state := s_request_ht_entry
       }.elsewhen(io.mem.s2_xcpt.asUInt.orR) {
+        midas.targetutils.SynthesizePrintf(
+          printf("HTLB.xcpt: cycle=%d hid=0x%x in wait_ht_entry → s_request_ht_entry\n",
+            timeline.cycle, hid_req)
+        )
         next_state := s_request_ht_entry
       }
     }
@@ -569,10 +606,18 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   when(reset.asBool || io.clear_htlb) {
     entries.foreach(_.foreach(_.invalidate()))
     ht_directory_cache.foreach(_.foreach(_.valid := false.B))
+    when(io.clear_htlb) {
+      midas.targetutils.SynthesizePrintf(
+        printf("HTLB.clear_htlb: cycle=%d all entries invalidated\n", timeline.cycle)
+      )
+    }
   }
 
   // Invalidation
   when(io.htInval.orR) {
+    midas.targetutils.SynthesizePrintf(
+      printf("HTLB.htInval: cycle=%d hid=0x%x\n", timeline.cycle, io.htInval)
+    )
     // Invalidate L1
     when(io.htInval === ((BigInt(1) << handleBits) - 1).U) {
       entries.foreach(_.foreach(_.invalidate()))
