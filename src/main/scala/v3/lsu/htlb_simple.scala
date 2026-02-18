@@ -448,6 +448,8 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
         }.elsewhen(io.mem.s2_nack) {
           next_state := s_request_ht_directory
+        }.elsewhen(io.mem.s2_xcpt.asUInt.orR) {
+          next_state := s_request_ht_directory
         }
       }
     }
@@ -507,6 +509,8 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
         next_state := s_ready
 
       }.elsewhen(io.mem.s2_nack) {
+        next_state := s_request_ht_entry
+      }.elsewhen(io.mem.s2_xcpt.asUInt.orR) {
         next_state := s_request_ht_entry
       }
     }

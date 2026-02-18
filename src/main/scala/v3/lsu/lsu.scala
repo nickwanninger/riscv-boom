@@ -901,8 +901,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     htlb.io.req(w).valid            := exe_htlb_valid(w)
     htlb.io.req(w).bits.haddr       := exe_htlb_vaddr(w)
     htlb.io.req(w).bits.passthrough := exe_htlb_passthr(w)
-    when (htlb.io.req(w).valid && !exe_htlb_passthr(w) && boomParams.enableHandleTracing.B && is_incoming(w)) {
+    if (boomParams.enableHandleTracing) {
+      when (htlb.io.req(w).valid && !exe_htlb_passthr(w) && is_incoming(w)) {
         midas.targetutils.SynthesizePrintf(printf("h%x,%d\n", htlb.io.req(w).bits.haddr, htlb.io.req(w).bits.passthrough))
+      }
     }
   }
 
@@ -930,8 +932,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     dtlb.io.req(w).bits.prv         := io.ptw.status.prv
     dtlb.io.req(w).bits.handle      := exe_is_handle(w)
 
-    when (dtlb.io.req(w).valid && htlb_enabled && boomParams.enableStateTracing.B) {
-      midas.targetutils.SynthesizePrintf(printf("t(%d%d)%x,%d,%d,%d\n", isRead(exe_cmd(w)), isWrite(exe_cmd(w)), dtlb.io.req(w).bits.vaddr, dtlb.io.req(w).bits.htlb_passthrough, dtlb.io.req(w).bits.passthrough, dtlb.io.req(w).bits.handle))
+    if (boomParams.enableStateTracing) {
+      when (dtlb.io.req(w).valid && htlb_enabled) {
+        midas.targetutils.SynthesizePrintf(printf("t(%d%d)%x,%d,%d,%d\n", isRead(exe_cmd(w)), isWrite(exe_cmd(w)), dtlb.io.req(w).bits.vaddr, dtlb.io.req(w).bits.htlb_passthrough, dtlb.io.req(w).bits.passthrough, dtlb.io.req(w).bits.handle))
+      }
     }
   }
   dtlb.io.kill                      := exe_kill.reduce(_||_)
