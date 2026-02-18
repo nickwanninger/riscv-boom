@@ -11,8 +11,6 @@ import freechips.rocketchip.rocket.constants._
 
 import boom.v3.common._
 import freechips.rocketchip.tile.CoreBundle
-import freechips.rocketchip.jtag.JtagState.State.width
-import freechips.rocketchip.tilelink.TLMessages.d
 
 
 
@@ -69,35 +67,6 @@ class TimelineTracker()(implicit val p: Parameters) extends HasBoomCoreParameter
   }
 }
 
-
-
-
-class HandleTraceQueue(width: Int, log2Depth: Int)(implicit p: Parameters)
-    extends BoomModule()(p) {
-  val io = IO(new Bundle {
-    val enq = Flipped(Decoupled(UInt(width.W)))
-  })
-
-  val depth = 1 << log2Depth
-  val queue = Reg(Vec(depth, UInt(width.W)))
-  val head = RegInit(0.U(log2Depth.W))
-  val tail = RegInit(0.U(log2Depth.W))
-  val count = RegInit(0.U((log2Depth + 1).W))
-
-  val full = count === depth.U
-  io.enq.ready := true.B
-
-  when(io.enq.valid) {
-    queue(tail) := io.enq.bits
-    tail := tail + 1.U
-
-    when(full) {
-      head := head + 1.U
-    }.otherwise {
-      count := count + 1.U
-    }
-  }
-}
 
 
 
@@ -178,7 +147,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   }
 
   val twoStageHTW = boomParams.enableTwoStageHTW
-  val fastPathEnabled = true
 
   val timeline = new TimelineTracker()
 
@@ -191,9 +159,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   val entries = Reg(Vec(cfg.nSets, Vec(cfg.nWays, new Entry(cfg.nSets))))
 
   val l1_plru = new SetAssocLRU(cfg.nSets, cfg.nWays, "plru")
-  val trace_queue = Module(new HandleTraceQueue(handleBits, 4))
-  trace_queue.io.enq.valid := false.B
-  trace_queue.io.enq.bits := 0.U
 
   // Hit Logic
   val hid_tag = Split(hid, idxBits)._1
@@ -299,20 +264,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   // FSM Implementation
   state := Mux(io.htlb_enabled, next_state, s_ready)
 
-  // XXX: see io.refilling comment above - disabled to avoid potential combinational loop in FireSim.
-  // val refilling = RegInit(false.B)
-  // refilling := next_state === s_request_ht_directory || next_state === s_wait_ht_directory || next_state === s_request_ht_entry || next_state === s_wait_ht_entry
-  // io.refilling.valid := refilling
-  // io.refilling.bits := hid
-
-
-  // timeline.trackStateValue("htlb.access", "miss", hid, io.req(0).fire && hm_enabled && htlb_miss)
-  // timeline.trackStateValue("htlb.access", "hit", hid, io.req(0).fire && hm_enabled && htlb_hit)
-  // timeline.trackStateValue("htlb.access", "refilling", hid, refilling)
-  // timeline.trackState("htlb.access", "refilling", refilling)
-  // timeline.trackState("htlb.access", "not ready", state =/= s_ready)
-
-  // timeline.trackState("htlb", "ready", state === s_ready)
   timeline.trackState("htlb.state", "request_ht_directory", state === s_request_ht_directory)
   timeline.trackState("htlb.state", "wait_ht_directory", state === s_wait_ht_directory)
   timeline.trackState("htlb.state", "request_ht_entry", state === s_request_ht_entry)
@@ -321,10 +272,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   timeline.trackState("htlb.state", "mem_req", io.mem.req.valid)
   timeline.trackState("htlb.state", "mem_resp", io.mem.resp.valid)
   timeline.trackState("htlb.state", "retry_nack", io.mem.s2_nack)
-
-
-  // timeline.trackStateValue("htlb.access", "missed on", io.refill_hid, io.refill_valid)
-
 
   for (s <- 0 until cfg.nSets) {
     for (w <- 0 until cfg.nWays) {
@@ -342,63 +289,63 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       // If a simple miss, start handling it
       when(io.req(0).fire && htlb_miss) {
         hid_req := hid
-        
-        if (fastPathEnabled) {
-          // Fast path: attempt to fire the memory request immediately from s_ready,
-          // skipping the request state if it succeeds.
-          if (twoStageHTW) {
-            val cache = ht_directory_cache.get
-            val l0_idx = getIndex(hid)
-            val l0_tag = getTag(hid)
-            val l0_entry = cache(l0_idx)
-            val l0_hit = l0_entry.valid && l0_entry.tag === l0_tag
 
-            when(l0_hit) {
-              inner_walk_base := l0_entry.data
-              walk_addr := l0_entry.data + (hid(entries_per_ht_bits - 1, 0)) * 8.U
-              io.mem.req.valid := true.B
-              when (io.mem.req.fire) {
-                next_state := s_wait_ht_entry
-              } .otherwise {
-                next_state := s_request_ht_entry
-              }
-            }.otherwise {
-              walk_addr := io.htBase + (hid >> entries_per_ht_bits) * 8.U
-              io.mem.req.valid := true.B
-              when (io.mem.req.fire) {
-                next_state := s_wait_ht_directory
-              } .otherwise {
-                next_state := s_request_ht_directory
-              }
-            }
-          } else {
-            walk_addr := io.htBase + hid * 8.U
+        if (boomParams.enableStateTracing) {
+          midas.targetutils.SynthesizePrintf(
+            printf("HTLB.miss: cycle=%d hid=0x%x htBase=0x%x\n",
+              timeline.cycle, hid, io.htBase)
+          )
+        }
+
+        if (twoStageHTW) {
+          val cache = ht_directory_cache.get
+          val l0_idx = getIndex(hid)
+          val l0_tag = getTag(hid)
+          val l0_entry = cache(l0_idx)
+          val l0_hit = l0_entry.valid && l0_entry.tag === l0_tag
+
+          when(l0_hit) {
+            inner_walk_base := l0_entry.data
+            walk_addr := l0_entry.data + (hid(entries_per_ht_bits - 1, 0)) * 8.U
             io.mem.req.valid := true.B
-            when (io.mem.req.fire) {
+            when(io.mem.req.fire) {
+              if (boomParams.enableStateTracing) {
+                midas.targetutils.SynthesizePrintf(
+                  printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x (L0 hit)\n",
+                    timeline.cycle, hid, walk_addr)
+                )
+              }
               next_state := s_wait_ht_entry
-            } .otherwise {
+            }.otherwise {
               next_state := s_request_ht_entry
+            }
+          }.otherwise {
+            walk_addr := io.htBase + (hid >> entries_per_ht_bits) * 8.U
+            io.mem.req.valid := true.B
+            when(io.mem.req.fire) {
+              if (boomParams.enableStateTracing) {
+                midas.targetutils.SynthesizePrintf(
+                  printf("HTLB.walk.dir: cycle=%d hid=0x%x addr=0x%x\n",
+                    timeline.cycle, hid, walk_addr)
+                )
+              }
+              next_state := s_wait_ht_directory
+            }.otherwise {
+              next_state := s_request_ht_directory
             }
           }
         } else {
-          // Slow path: always pass through the request state.
-          if (twoStageHTW) {
-            val cache = ht_directory_cache.get
-            val l0_idx = getIndex(hid)
-            val l0_tag = getTag(hid)
-            val l0_entry = cache(l0_idx)
-            val l0_hit = l0_entry.valid && l0_entry.tag === l0_tag
-
-            when(l0_hit) {
-              inner_walk_base := l0_entry.data
-              walk_addr := l0_entry.data + (hid(entries_per_ht_bits - 1, 0)) * 8.U
-              next_state := s_request_ht_entry
-            }.otherwise {
-              walk_addr := io.htBase + (hid >> entries_per_ht_bits) * 8.U
-              next_state := s_request_ht_directory
+          walk_addr := io.htBase + hid * 8.U
+          io.mem.req.valid := true.B
+          when(io.mem.req.fire) {
+            if (boomParams.enableStateTracing) {
+              midas.targetutils.SynthesizePrintf(
+                printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
+                  timeline.cycle, hid, walk_addr)
+              )
             }
-          } else {
-            walk_addr := io.htBase + hid * 8.U
+            next_state := s_wait_ht_entry
+          }.otherwise {
             next_state := s_request_ht_entry
           }
         }
@@ -415,6 +362,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
         // Only advance state if the request actually fired
         when(io.mem.req.fire) {
+          if (boomParams.enableStateTracing) {
+            midas.targetutils.SynthesizePrintf(
+              printf("HTLB.walk.dir: cycle=%d hid=0x%x addr=0x%x\n",
+                timeline.cycle, hid_req, walk_addr)
+            )
+          }
           next_state := s_wait_ht_directory
         }
       }
@@ -441,9 +394,15 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           io.mem.req.valid := true.B
 
           when (io.mem.req.fire) {
-             next_state := s_wait_ht_entry
+            if (boomParams.enableStateTracing) {
+              midas.targetutils.SynthesizePrintf(
+                printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
+                  timeline.cycle, hid_req, walk_addr)
+              )
+            }
+            next_state := s_wait_ht_entry
           } .otherwise {
-             next_state := s_request_ht_entry
+            next_state := s_request_ht_entry
           }
 
         }.elsewhen(io.mem.s2_nack) {
@@ -472,6 +431,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       io.mem.req.valid := true.B
 
       when(io.mem.req.fire) {
+        if (boomParams.enableStateTracing) {
+          midas.targetutils.SynthesizePrintf(
+            printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
+              timeline.cycle, hid_req, walk_addr)
+          )
+        }
         next_state := s_wait_ht_entry
       }
     }
@@ -502,9 +467,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           else 0.U
 
         entries(r_idx)(repl_way).insert(r_tag, newEntry)
-
-        // trace_queue.io.enq.valid := true.B
-        // trace_queue.io.enq.bits := hid_req
 
         next_state := s_ready
 
@@ -598,11 +560,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   when(io.tlb(0).valid) {
     val (paddr_hid_tag, paddr_hid_set) = Split(io.tlb(0).bits.hid, idxBits)
     val hitVecPAddr = entries(paddr_hid_set).map(_.hit(paddr_hid_tag))
-    if (boomParams.enableStateTracing) {
-      // midas.targetutils.SynthesizePrintf(
-      //   printf("Ht:%d,%x\n", io.tlb(0).bits.hid, io.tlb(0).bits.paddr)
-      // )
-    }
     entries(paddr_hid_set)(OHToUInt(hitVecPAddr)).set_paddr(
       io.tlb(0).bits.paddr
     )
