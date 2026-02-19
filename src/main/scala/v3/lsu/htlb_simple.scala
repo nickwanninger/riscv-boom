@@ -233,6 +233,13 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
   val inner_walk_base = RegInit(0.U(xLen.W))
 
+  // htInval is a CSR that software writes to request an invalidation.
+  // The CSR holds its value until software writes again, so we must only
+  // act on value changes (rising edge / new write) rather than every cycle
+  // the CSR is non-zero.
+  val htInval_prev = RegNext(io.htInval, 0.U)
+  val htInval_pulse = io.htInval.orR && io.htInval =/= htInval_prev
+
   // Memory Request Construction
   val walk_addr = Wire(UInt(xLen.W))
   walk_addr := 0.U // assignment in switch
@@ -614,7 +621,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   }
 
   // Invalidation
-  when(io.htInval.orR) {
+  when(htInval_pulse) {
     midas.targetutils.SynthesizePrintf(
       printf("HTLB.htInval: cycle=%d hid=0x%x\n", timeline.cycle, io.htInval)
     )
