@@ -88,6 +88,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     val ht_size = Input(UInt(xLen.W))
     val htlb_enabled = Input(Bool())
     val pht_enabled = Input(Bool())
+    val htInvald = Output(Bool())
 
     // XXX: refilling was used to detect nonsense misses in the LSU, may cause
     //      combinational loops in FireSim's token model. Disabled for now.
@@ -649,4 +650,5 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     }
   }
 
+  io.htInvald := htInval_pulse
 }

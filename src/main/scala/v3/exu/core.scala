@@ -279,12 +279,16 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   custom_csrs.csrs.foreach { c => c.stall := false.B; c.set := false.B; c.sdata := DontCare }
 
   (custom_csrs.csrs zip csr.io.customCSRs).map { case (lhs, rhs) => lhs <> rhs }
-  // XXX: old HTW removed - customCSRs(2) (htDumped) and customCSRs(3) (htInvald) tied off
+  // XXX: customCSRs(2) (htDumped) tied off, customCSRs(3) (htInvald) wired from LSU
   csr.io.customCSRs(2).set := false.B
   csr.io.customCSRs(2).sdata := 0.U
   csr.io.clear_mie := false.B
 
-  csr.io.customCSRs(3).set := false.B
+  when (io.lsu.htInvald) {
+    midas.targetutils.SynthesizePrintf(printf("[Core] HTLB Invalidation Completed\\n"))
+  }
+
+  csr.io.customCSRs(3).set := io.lsu.htInvald
   csr.io.customCSRs(3).sdata := 0.U
 
   csr.io.customCSRs(5).set := io.lsu.perf.tlbMiss
