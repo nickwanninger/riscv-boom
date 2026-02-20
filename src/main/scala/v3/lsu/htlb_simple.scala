@@ -637,14 +637,14 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
         }
       }
 
-      if (twoStageHTW) {
-        val l0_idx = getIndex(io.htInval)
-        val l0_tag = getTag(io.htInval)
-        val cache = ht_directory_cache.get
-        when(cache(l0_idx).valid && cache(l0_idx).tag === l0_tag) {
-          cache(l0_idx).valid := false.B
-        }
-      }
+      // if (twoStageHTW) {
+      //   val l0_idx = getIndex(io.htInval)
+      //   val l0_tag = getTag(io.htInval)
+      //   val cache = ht_directory_cache.get
+      //   when(cache(l0_idx).valid && cache(l0_idx).tag === l0_tag) {
+      //     cache(l0_idx).valid := false.B
+      //   }
+      // }
 
     }
   }
