@@ -261,7 +261,7 @@ class WithNLargeYukons(n: Int = 1) extends Config(
               fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
 
               nL1HTLBWays = 16,
-              nL1HTLBSets = 4,
+              nL1HTLBSets = 8,
 
               nL2HTLBWays = 8,
               nL2HTLBSets = 64,
