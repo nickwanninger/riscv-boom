@@ -195,12 +195,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   val next_state = WireDefault(state)
 
 
-  // Consider the number of times the HTLB is not ready (that is, it is dealing with a miss, blocking the LSU)
-  midas.targetutils.PerfCounter(state =/= s_ready, "htlb_waiting", "htlb_waiting")
-  midas.targetutils.PerfCounter(io.req(0).fire && htlb_miss, "htlb_miss", "htlb_miss")
-  midas.targetutils.PerfCounter(io.req(0).fire && htlb_hit && hm_enabled, "htlb_hit", "htlb_hit")
-  midas.targetutils.PerfCounter(state === s_request_ht_directory || state === s_request_ht_entry, "htlb_mem_stall_cycles", "htlb_mem_stall_cycles")
-  midas.targetutils.PerfCounter(io.req(0).fire && htlb_miss && l0_hit_in_s_ready, "htlb_l0_hit", "htlb_l0_hit")
 
 
 
@@ -290,6 +284,14 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   timeline.trackState("htlb.state", "mem_req", io.mem.req.valid)
   timeline.trackState("htlb.state", "mem_resp", io.mem.resp.valid)
   timeline.trackState("htlb.state", "retry_nack", io.mem.s2_nack)
+
+
+  // Consider the number of times the HTLB is not ready (that is, it is dealing with a miss, blocking the LSU)
+  midas.targetutils.PerfCounter(state =/= s_ready, "htlb_waiting", "htlb_waiting")
+  midas.targetutils.PerfCounter(io.req(0).fire && htlb_miss, "htlb_miss", "htlb_miss")
+  midas.targetutils.PerfCounter(io.req(0).fire && htlb_hit && hm_enabled, "htlb_hit", "htlb_hit")
+  midas.targetutils.PerfCounter(state === s_request_ht_directory || state === s_request_ht_entry, "htlb_mem_stall_cycles", "htlb_mem_stall_cycles")
+  midas.targetutils.PerfCounter(io.req(0).fire && htlb_miss && l0_hit_in_s_ready, "htlb_l0_hit", "htlb_l0_hit")
 
   for (s <- 0 until cfg.nSets) {
     for (w <- 0 until cfg.nWays) {
