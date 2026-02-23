@@ -197,6 +197,10 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
   // Consider the number of times the HTLB is not ready (that is, it is dealing with a miss, blocking the LSU)
   midas.targetutils.PerfCounter(state =/= s_ready, "htlb_waiting", "htlb_waiting")
+  midas.targetutils.PerfCounter(io.req(0).fire && htlb_miss, "htlb_miss", "htlb_miss")
+  midas.targetutils.PerfCounter(io.req(0).fire && htlb_hit && hm_enabled, "htlb_hit", "htlb_hit")
+  midas.targetutils.PerfCounter(state === s_request_ht_directory || state === s_request_ht_entry, "htlb_mem_stall_cycles", "htlb_mem_stall_cycles")
+  midas.targetutils.PerfCounter(io.req(0).fire && htlb_miss && l0_hit_in_s_ready, "htlb_l0_hit", "htlb_l0_hit")
 
 
 
@@ -231,6 +235,9 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
   val l0_lookup_idx = getIndex(hid_req)
   val l0_lookup_tag = getTag(hid_req)
+
+  // Hoisted wire so htlb_l0_hit PerfCounter can reference it outside the s_ready block
+  val l0_hit_in_s_ready = WireDefault(false.B)
 
   val inner_walk_base = RegInit(0.U(xLen.W))
 
@@ -317,6 +324,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           val l0_hit = l0_entry.valid && l0_entry.tag === l0_tag
 
           when(l0_hit) {
+            l0_hit_in_s_ready := true.B
             inner_walk_base := l0_entry.data
             walk_addr := l0_entry.data + (hid(entries_per_ht_bits - 1, 0)) * 8.U
             io.mem.req.valid := true.B
@@ -417,6 +425,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           io.mem.req.valid := true.B
 
           when (io.mem.req.fire) {
+            midas.targetutils.PerfCounter(mem_resp_valid && io.mem.req.fire, "htlb_fast_path_fired", "htlb_fast_path_fired")
             midas.targetutils.SynthesizePrintf(
               printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
                 timeline.cycle, hid_req, walk_addr)
