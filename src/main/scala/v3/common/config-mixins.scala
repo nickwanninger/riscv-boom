@@ -186,6 +186,55 @@ class WithNSmallBooms(n: Int = 1) extends Config(
   })
 )
 
+
+
+class WithNPicoYukons(n: Int = 1) extends Config(
+  new WithTAGELBPD ++ // Default to TAGE-L BPD
+  new Config((site, here, up) => {
+    case TilesLocated(InSubsystem) => {
+      val prev = up(TilesLocated(InSubsystem), site)
+      val idOffset = up(NumTiles)
+      (0 until n).map { i =>
+        BoomTileAttachParams(
+          tileParams = BoomTileParams(
+            core = BoomCoreParams(
+              fetchWidth = 2,
+              decodeWidth = 1,
+              numRobEntries = 16,
+              issueParams = Seq(
+                IssueParams(issueWidth=1, numEntries=4, iqType=IQT_MEM.litValue, dispatchWidth=1),
+                IssueParams(issueWidth=1, numEntries=4, iqType=IQT_INT.litValue, dispatchWidth=1),
+                IssueParams(issueWidth=1, numEntries=4, iqType=IQT_FP.litValue , dispatchWidth=1)),
+              numIntPhysRegisters = 32,
+              numFpPhysRegisters = 32,
+              numLdqEntries = 2,
+              numStqEntries = 2,
+              maxBrCount = 8,
+              nL1HTLBWays = 4,
+              nL1HTLBSets = 4,
+              numFetchBufferEntries = 8,
+              ftq = FtqParameters(nEntries=8),
+              nPerfCounters = 4,
+              fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
+            ),
+            dcache = Some(
+              DCacheParams(rowBits = 64, nSets=32, nWays=2, nMSHRs=2, nTLBWays=8)
+            ),
+            icache = Some(
+              ICacheParams(rowBits = 64, nSets=32, nWays=2, fetchBytes=2*4)
+            ),
+            tileId = i + idOffset
+          ),
+          crossingParams = RocketCrossingParams()
+        )
+      } ++ prev
+    }
+    case XLen => 64
+    case NumTiles => up(NumTiles) + n
+  })
+)
+
+
 class WithNSmallYukons(n: Int = 1) extends Config(
   new WithTAGELBPD ++ // Default to TAGE-L BPD
   new Config((site, here, up) => {

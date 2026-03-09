@@ -248,6 +248,8 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer){
   lsu.io.hellacache <> hellaCacheArb.io.mem
   outer.dcache.module.io.lsu <> lsu.io.dmem
 
+  midas.targetutils.PerfCounter(ptw.io.mem.resp.valid, "ptw_hellacache_resps", "cycles PTW receives a hellacache response")
+
   // Generate a descriptive string
   val frontendStr = outer.frontend.module.toString
   val coreStr = core.toString
