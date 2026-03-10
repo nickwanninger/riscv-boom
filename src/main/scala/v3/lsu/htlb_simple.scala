@@ -292,7 +292,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   midas.targetutils.PerfCounter(io.req(0).fire && htlb_hit && hm_enabled, "htlb_hit", "htlb_hit")
   midas.targetutils.PerfCounter(state === s_request_ht_directory || state === s_request_ht_entry, "htlb_mem_stall_cycles", "htlb_mem_stall_cycles")
   midas.targetutils.PerfCounter(io.req(0).fire && htlb_miss && l0_hit_in_s_ready, "htlb_l0_hit", "htlb_l0_hit")
-  midas.targetutils.PerfCounter(io.mem.resp.valid, "htlb_hellacache_resps", "cycles HTLB receives a hellacache response")
+  midas.targetutils.PerfCounter(state === s_wait_ht_directory || state === s_wait_ht_entry, "htlb_mem_wait_cycles", "htlb_mem_wait_cycles")
 
   for (s <- 0 until cfg.nSets) {
     for (w <- 0 until cfg.nWays) {
