@@ -8,11 +8,45 @@ import freechips.rocketchip.tilelink._
 import freechips.rocketchip.util._
 import freechips.rocketchip.rocket._
 import freechips.rocketchip.rocket.constants._
+import freechips.rocketchip.rocket.HellaCacheIO
 
 import boom.v3.common._
 import freechips.rocketchip.tile.CoreBundle
 
+class HTLBReq(implicit p: Parameters) extends BoomBundle()(p) {
+  val haddr = UInt(xLen.W)
+  val passthrough = Bool()
+}
 
+class HTLBResp(implicit p: Parameters) extends BoomBundle()(p) {
+  val addr = UInt(maxSVAddrBits.W)
+  val miss = Bool()
+  val phys = Bool()
+  val try_phys = Bool()
+}
+
+class TLBHTLBResp(implicit p: Parameters) extends BoomBundle()(p) {
+  val hid = UInt(handleBits.W)
+  val paddr = UInt(maxSVAddrBits.W)
+}
+
+case class HTLBConfig(
+    nSets: Int,
+    nWays: Int
+)
+
+class HTE(implicit p: Parameters) extends BoomBundle()(p) {
+  val phys = Bool()
+  val try_phys = Bool()
+  val reserved = UInt((64 - maxSVAddrBits - 2).W)
+  val addr = UInt(maxSVAddrBits.W)
+}
+
+class TopLevelCacheEntry(implicit p: Parameters) extends BoomBundle()(p) {
+  val valid = Bool()
+  val tag = UInt((handleBits - 18).W)  // Since ind1 is 18 bits
+  val data = UInt(maxSVAddrBits.W)     // Store the base address for inner walks
+}
 
 class TimelineTracker()(implicit val p: Parameters) extends HasBoomCoreParameters {
   val cycle = if (boomParams.enableStateTracing) {
@@ -76,7 +110,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   val io = IO(new Bundle {
     val req = Flipped(Vec(memWidth, Decoupled(new HTLBReq)))
     val resp = Vec(memWidth, new HTLBResp)
-    val htw = new HTLBHTWIO
     val tlb = Flipped(Vec(memWidth, Valid(new TLBHTLBResp)))
     val mem = new HellaCacheIO
     val htDump = Input(UInt(maxSVAddrBits.W))
@@ -598,18 +631,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   // Tie-offs and unused IO
   // ------------------------------------------------------------------------------------------------
   // ------------------------------------------------------------------------------------------------
-
-  io.htw.req.valid := false.B
-  io.htw.req.bits.valid := false.B
-  io.htw.req.bits.bits.hid := 0.U
-  io.htw.evict.valid := false.B
-  io.htw.evict.bits := DontCare
-  io.htw.l1_dumped := false.B
-  io.htw.l1miss := false.B // Can technically be hooked up if profiling needs it
-
-  // Pass through enable signals
-  io.htw.htlb_enabled := io.htlb_enabled
-  io.htw.pht_enabled := io.pht_enabled
 
   // Tie off TLB updates
   when(io.tlb(0).valid) {

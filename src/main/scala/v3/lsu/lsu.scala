@@ -314,8 +314,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   )
 
   val htlb = Module(new HTLBSimple(HTLBConfig(boomParams.nL1HTLBSets, boomParams.nL1HTLBWays)))
-  // XXX: old HTW removed - tie off htlb's htw port so inputs are driven
-  htlb.io.htw <> DontCare
   io.htlb_mem <> htlb.io.mem
   htlb.io.htDump <> io.core.htDump
   htlb.io.htInval <> io.core.htInval

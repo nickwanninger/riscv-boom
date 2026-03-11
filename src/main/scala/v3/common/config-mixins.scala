@@ -263,8 +263,6 @@ class WithNSmallYukons(n: Int = 1) extends Config(
               ftq = FtqParameters(nEntries=16),
               nPerfCounters = 4,
               fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
-              nL2HTLBWays = 8,
-              nL2HTLBSets = 64,
             ),
             dcache = Some(
               DCacheParams(rowBits = 64, nSets=64, nWays=4, nMSHRs=2, nTLBWays=8)
@@ -311,9 +309,6 @@ class WithNLargeYukons(n: Int = 1) extends Config(
 
               nL1HTLBWays = 8,
               nL1HTLBSets = 8,
-
-              nL2HTLBWays = 8,
-              nL2HTLBSets = 64,
               HTWCacheSize = 8,
             ),
             dcache = Some(
@@ -360,8 +355,6 @@ class WithNLargeYukons2(n: Int = 1) extends Config(
               fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
               nL1HTLBWays = 4,
               nL1HTLBSets = 4,
-              nL2HTLBWays = 8,
-              nL2HTLBSets = 64,
               HTWCacheSize = 8,
               numDCacheBanks = 2,
               enablePrefetching = true,
@@ -413,9 +406,6 @@ class WithNMegaTLBLargeYukons(n: Int = 1) extends Config(
 
               nL1HTLBWays = 16,
               nL1HTLBSets = 4,
-
-              nL2HTLBWays = 8,
-              nL2HTLBSets = 64,
               HTWCacheSize = 8,
             ),
             dcache = Some(
@@ -462,8 +452,6 @@ class WithNLargeYukonsWithAlphaBPD(n: Int = 1) extends Config(
               fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
               nL1HTLBWays = 4,
               nL1HTLBSets = 4,
-              nL2HTLBWays = 8,
-              nL2HTLBSets = 64,
               HTWCacheSize = 8,
             ),
             dcache = Some(
@@ -510,8 +498,6 @@ class WithNLargeYukonsWith2xTAGELBPD(n: Int = 1) extends Config(
               fpu = Some(freechips.rocketchip.tile.FPUParams(sfmaLatency=4, dfmaLatency=4, divSqrt=true)),
               nL1HTLBWays = 4,
               nL1HTLBSets = 4,
-              nL2HTLBWays = 8,
-              nL2HTLBSets = 64,
               HTWCacheSize = 8,
             ),
             dcache = Some(

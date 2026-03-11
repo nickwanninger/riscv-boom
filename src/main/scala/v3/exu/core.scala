@@ -267,9 +267,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       ("ITLB miss",   () => io.ifu.perf.tlbMiss),
       ("DTLB miss",   () => io.lsu.perf.tlbMiss),
       ("L2 TLB miss", () => io.ptw.perf.l2miss)))))
-      // ("L1 TLB miss", () => io.ptw.perf.l1miss)))))
-      // ("L1 HTLB miss", () => io.htw.perf.l1miss),  // XXX: old HTW removed
-      // ("L2 HTLB miss", () => io.htw.perf.l2miss)
   val csr = Module(new freechips.rocketchip.rocket.CSRFile(perfEvents, boomParams.customCSRs.decls))
   csr.io.inst foreach { c => c := DontCare }
   csr.io.rocc_interrupt := io.rocc.interrupt
