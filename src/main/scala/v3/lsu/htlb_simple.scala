@@ -371,10 +371,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
               )
               next_state := s_wait_ht_entry
             }.otherwise {
-              midas.targetutils.SynthesizePrintf(
-                printf("HTLB.stall: cycle=%d hid=0x%x mem busy, L0 hit → s_request_ht_entry\n",
-                  timeline.cycle, hid)
-              )
               next_state := s_request_ht_entry
             }
           }.otherwise {
@@ -387,10 +383,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
               )
               next_state := s_wait_ht_directory
             }.otherwise {
-              midas.targetutils.SynthesizePrintf(
-                printf("HTLB.stall: cycle=%d hid=0x%x mem busy, L0 miss → s_request_ht_directory\n",
-                  timeline.cycle, hid)
-              )
               next_state := s_request_ht_directory
             }
           }
@@ -398,16 +390,8 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           walk_addr := io.htBase + hid * 8.U
           io.mem.req.valid := true.B
           when(io.mem.req.fire) {
-            midas.targetutils.SynthesizePrintf(
-              printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
-                timeline.cycle, hid, walk_addr)
-            )
             next_state := s_wait_ht_entry
           }.otherwise {
-            midas.targetutils.SynthesizePrintf(
-              printf("HTLB.stall: cycle=%d hid=0x%x mem busy → s_request_ht_entry\n",
-                timeline.cycle, hid)
-            )
             next_state := s_request_ht_entry
           }
         }
@@ -462,30 +446,14 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
           when (io.mem.req.fire) {
             midas.targetutils.PerfCounter(mem_resp_valid && io.mem.req.fire, "htlb_fast_path_fired", "htlb_fast_path_fired")
-            midas.targetutils.SynthesizePrintf(
-              printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x\n",
-                timeline.cycle, hid_req, walk_addr)
-            )
             next_state := s_wait_ht_entry
           } .otherwise {
-            midas.targetutils.SynthesizePrintf(
-              printf("HTLB.stall: cycle=%d hid=0x%x mem busy after dir_resp → s_request_ht_entry\n",
-                timeline.cycle, hid_req)
-            )
             next_state := s_request_ht_entry
           }
 
         }.elsewhen(io.mem.s2_nack) {
-          midas.targetutils.SynthesizePrintf(
-            printf("HTLB.nack: cycle=%d hid=0x%x in wait_ht_directory → s_request_ht_directory\n",
-              timeline.cycle, hid_req)
-          )
           next_state := s_request_ht_directory
         }.elsewhen(io.mem.s2_xcpt.asUInt.orR) {
-          midas.targetutils.SynthesizePrintf(
-            printf("HTLB.xcpt: cycle=%d hid=0x%x in wait_ht_directory → s_request_ht_directory\n",
-              timeline.cycle, hid_req)
-          )
           next_state := s_request_ht_directory
         }
       }
@@ -544,23 +512,11 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
         entries(r_idx)(repl_way).insert(r_tag, newEntry)
 
-        midas.targetutils.SynthesizePrintf(
-          printf("HTLB.fill: cycle=%d hid=0x%x addr=0x%x phys=%d try_phys=%d → s_ready\n",
-            timeline.cycle, hid_req, newEntry.addr, newEntry.phys, newEntry.try_phys)
-        )
         next_state := s_ready
 
       }.elsewhen(io.mem.s2_nack) {
-        midas.targetutils.SynthesizePrintf(
-          printf("HTLB.nack: cycle=%d hid=0x%x in wait_ht_entry → s_request_ht_entry\n",
-            timeline.cycle, hid_req)
-        )
         next_state := s_request_ht_entry
       }.elsewhen(io.mem.s2_xcpt.asUInt.orR) {
-        midas.targetutils.SynthesizePrintf(
-          printf("HTLB.xcpt: cycle=%d hid=0x%x in wait_ht_entry → s_request_ht_entry\n",
-            timeline.cycle, hid_req)
-        )
         next_state := s_request_ht_entry
       }
     }
