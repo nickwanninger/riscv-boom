@@ -214,12 +214,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   htlb_hit := real_hits.orR
   htlb_miss := hm_enabled && !htlb_hit
 
-  // Update PLRU
-  when(io.req(0).valid && hm_enabled) {
-    when(real_hits.orR) {
-      l1_plru.access(hid_set, OH1ToUInt(real_hits))
-    }
-  }
+  // The PLRU is updated after the fill target (r_idx, repl_way) is known, below.
 
   // The requested HID
   val hid_req = Reg(UInt(handleBits.W))
@@ -355,6 +350,16 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
         OHToUInt(PriorityEncoderOH(~entries(r_idx).map(_.valid).asUInt))
       )
     else 0.U
+
+  // Update PLRU on a hit and on a fill. real_hits is one-hot, so use OHToUInt
+  // (OH1ToUInt gave way k+1). A fill marks the new entry as recently used, so
+  // the next fill in the set does not evict it before the retry. If both go to
+  // the same set in one cycle, the fill is applied last.
+  val plru_hit  = io.req(0).valid && hm_enabled && real_hits.orR
+  val plru_fill = state === s_wait_ht_entry && mem_resp_valid
+  l1_plru.access(
+    Seq(hid_set, r_idx),
+    Seq(Pipe(plru_hit, OHToUInt(real_hits), 0), Pipe(plru_fill, repl_way, 0)))
 
   switch(state) {
 
