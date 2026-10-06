@@ -915,6 +915,50 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
 
   val exe_htlb_miss = widthMap(w => Mux(htlb_enabled, htlb.io.req(w).valid && (htlb.io.resp(w).miss || !htlb.io.req(w).ready), false.B))
+
+  // HTLB retry and wrong-path PerfCounters (see thesis todo/01-htlb-counters.md). These only observe state.
+  // The description equals the label: thesis src/yukon/bench.py names result columns by description.
+  // HTLBSimple serves lane 0 only, so these use lane 0 (memWidth == 1 in all Yukon configs that build).
+  {
+    def isHandleAddr(a: UInt) = a(63) && !a(62)
+    val htlb_rdy = RegNext(htlb.io.miss_rdy)
+    val ld_handle_retry = ldq_retry_e.valid && ldq_retry_e.bits.addr.valid &&
+                          ldq_retry_e.bits.addr_is_virtual && isHandleAddr(ldq_retry_e.bits.addr.bits)
+    val st_handle_retry = stq_retry_e.valid && stq_retry_e.bits.addr.valid &&
+                          stq_retry_e.bits.addr_is_virtual && isHandleAddr(stq_retry_e.bits.addr.bits)
+    midas.targetutils.PerfCounter((ld_handle_retry && !htlb_rdy).asUInt +& (st_handle_retry && !htlb_rdy).asUInt,
+      "lsu_handle_retry_blocked", "lsu_handle_retry_blocked")
+
+    val other_virtual_ld = (0 until numLdqEntries).map(i =>
+      ldq(i).valid && ldq(i).bits.addr.valid && ldq(i).bits.addr_is_virtual &&
+      !isHandleAddr(ldq(i).bits.addr.bits)).reduce(_||_)
+    midas.targetutils.PerfCounter(ld_handle_retry && !htlb_rdy && other_virtual_ld,
+      "lsu_retry_hol_blocked", "lsu_retry_hol_blocked")
+
+    val is_retry = will_fire_load_retry(0) || will_fire_sta_retry(0)
+    midas.targetutils.PerfCounter(is_retry && htlb.io.req(0).valid && !exe_htlb_passthr(0) && htlb.io.resp(0).miss,
+      "lsu_handle_retry_miss", "lsu_handle_retry_miss")
+
+    // The uop in the HTLB stage in the walk_start cycle started the walk.
+    val walk_valid  = RegInit(false.B)
+    val walk_killed = RegInit(false.B)
+    val walk_brmask = Reg(UInt(maxBrCount.W))
+    when (htlb.io.perf.walk_start) {
+      walk_valid  := true.B
+      walk_brmask := GetNewBrMask(io.core.brupdate, exe_tlb_uop(0))
+      walk_killed := IsKilledByBranch(io.core.brupdate, exe_tlb_uop(0)) || io.core.exception
+    } .elsewhen (walk_valid) {
+      walk_brmask := GetNewBrMask(io.core.brupdate, walk_brmask)
+      when (IsKilledByBranch(io.core.brupdate, walk_brmask) || io.core.exception) {
+        walk_killed := true.B
+      }
+      when (htlb.io.perf.fill || htlb.io.miss_rdy) {
+        walk_valid := false.B
+      }
+    }
+    midas.targetutils.PerfCounter(htlb.io.perf.fill && walk_valid && walk_killed,
+      "htlb_fill_wrong_path", "htlb_fill_wrong_path")
+  }
   val exe_tlb_vaddr = widthMap(w => Mux(htlb_enabled, htlb.io.resp(w).addr, exe_htlb_vaddr(w)))
 
   val exe_passthr= widthMap(w =>

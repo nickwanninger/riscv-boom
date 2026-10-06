@@ -30,6 +30,12 @@ class TLBHTLBResp(implicit p: Parameters) extends BoomBundle()(p) {
   val paddr = UInt(maxSVAddrBits.W)
 }
 
+// Events for PerfCounters in the LSU. Nothing in the HTLB reads these back.
+class HTLBPerfIO extends Bundle {
+  val walk_start = Bool()
+  val fill       = Bool()
+}
+
 case class HTLBConfig(
     nSets: Int,
     nWays: Int
@@ -122,6 +128,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     val htlb_enabled = Input(Bool())
     val pht_enabled = Input(Bool())
     val htInvald = Output(Bool())
+    val perf = Output(new HTLBPerfIO)
 
     // XXX: refilling was used to detect nonsense misses in the LSU, may cause
     //      combinational loops in FireSim's token model. Disabled for now.
@@ -335,6 +342,20 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   }
 
 
+  // Fill target. Hoisted out of s_wait_ht_entry so the PerfCounters can see the victim.
+  val (r_tag, r_idx) = Split(hid_req, idxBits)
+  // Use PLRU to pick way or first invalid
+  val candidate_repl_way =
+    (if (cfg.nWays > 1) l1_plru.way(r_idx) else 0.U)
+  val repl_way =
+    if (cfg.nWays > 1)
+      Mux(
+        entries(r_idx).map(_.valid).asUInt.andR,
+        candidate_repl_way,
+        OHToUInt(PriorityEncoderOH(~entries(r_idx).map(_.valid).asUInt))
+      )
+    else 0.U
+
   switch(state) {
 
 
@@ -497,19 +518,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
         newEntry.addr := hte.addr
         newEntry.try_phys := hte.try_phys
 
-        val (r_tag, r_idx) = Split(hid_req, idxBits)
-        // Use PLRU to pick way or first invalid
-        val candidate_repl_way =
-          (if (cfg.nWays > 1) l1_plru.way(r_idx) else 0.U)
-        val repl_way =
-          if (cfg.nWays > 1)
-            Mux(
-              entries(r_idx).map(_.valid).asUInt.andR,
-              candidate_repl_way,
-              OHToUInt(PriorityEncoderOH(~entries(r_idx).map(_.valid).asUInt))
-            )
-          else 0.U
-
         entries(r_idx)(repl_way).insert(r_tag, newEntry)
 
         next_state := s_ready
@@ -638,4 +646,64 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   }
 
   io.htInvald := do_htInval
+
+  // ------------------------------------------------------------------------------------------------
+  // ------------------------------------------------------------------------------------------------
+  // PerfCounters (see thesis todo/01-htlb-counters.md). These only observe state.
+  // The description equals the label: thesis src/yukon/bench.py names result columns by description.
+  // ------------------------------------------------------------------------------------------------
+  // ------------------------------------------------------------------------------------------------
+
+  val walk_start = state === s_ready && io.htlb_enabled && !do_htInval &&
+                   io.req(0).fire && htlb_miss
+  val fill       = state === s_wait_ht_entry && mem_resp_valid
+  val waiting    = state =/= s_ready
+
+  io.perf.walk_start := walk_start
+  io.perf.fill       := fill
+
+  // Walks
+  val walk_cycles = RegInit(0.U(16.W))
+  val walk_max    = RegInit(0.U(16.W))
+  when(walk_start) {
+    walk_cycles := 1.U
+  }.elsewhen(waiting && walk_cycles =/= ~0.U(16.W)) {
+    walk_cycles := walk_cycles + 1.U
+  }
+  when(fill && walk_cycles > walk_max) { walk_max := walk_cycles }
+
+  midas.targetutils.PerfCounter(walk_start, "htlb_walk_start", "htlb_walk_start")
+  if (twoStageHTW) {
+    midas.targetutils.PerfCounter(walk_start && !l0_hit_in_s_ready, "htlb_walk_l0_miss", "htlb_walk_l0_miss")
+  }
+  midas.targetutils.PerfCounter(fill, "htlb_fill", "htlb_fill")
+  midas.targetutils.PerfCounter.identity(walk_max, "htlb_walk_lat_max", "htlb_walk_lat_max")
+  midas.targetutils.PerfCounter(io.mem.req.fire, "htlb_mem_req", "htlb_mem_req")
+  midas.targetutils.PerfCounter(io.mem.s2_nack && (state === s_wait_ht_directory || state === s_wait_ht_entry),
+    "htlb_mem_nack", "htlb_mem_nack")
+
+  // Lost entries. "used" is set on a hit and cleared on a fill. The fill write is last, so a fill wins.
+  val used = RegInit(VecInit(Seq.fill(cfg.nSets)(VecInit(Seq.fill(cfg.nWays)(false.B)))))
+  when(io.req(0).valid && htlb_hit) { used(hid_set)(OHToUInt(real_hits)) := true.B }
+  when(fill) { used(r_idx)(repl_way) := false.B }
+
+  val victim_valid = entries(r_idx)(repl_way).valid
+  val victim_used  = used(r_idx)(repl_way)
+  val inval_all    = io.htInval === ((BigInt(1) << handleBits) - 1).U
+  val miss_busy    = io.req(0).fire && htlb_miss && waiting
+
+  midas.targetutils.PerfCounter(fill && victim_valid, "htlb_evict_valid", "htlb_evict_valid")
+  midas.targetutils.PerfCounter(fill && victim_valid && !victim_used, "htlb_evict_unused", "htlb_evict_unused")
+  midas.targetutils.PerfCounter(io.clear_htlb, "htlb_clear", "htlb_clear")
+  midas.targetutils.PerfCounter(do_htInval && !inval_all, "htlb_inval_one", "htlb_inval_one")
+  midas.targetutils.PerfCounter(do_htInval && inval_all, "htlb_inval_all", "htlb_inval_all")
+  midas.targetutils.PerfCounter(io.htInval.orR && waiting, "htlb_inval_wait", "htlb_inval_wait")
+  midas.targetutils.PerfCounter(miss_busy && hid === hid_req, "htlb_miss_busy_same", "htlb_miss_busy_same")
+  midas.targetutils.PerfCounter(miss_busy && hid =/= hid_req, "htlb_miss_busy_other", "htlb_miss_busy_other")
+
+  if (boomParams.enableHTLBSetCounters) {
+    for (s <- 0 until cfg.nSets) {
+      midas.targetutils.PerfCounter(walk_start && hid_set === s.U, s"htlb_walk_set$s", s"htlb_walk_set$s")
+    }
+  }
 }

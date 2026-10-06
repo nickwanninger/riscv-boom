@@ -110,6 +110,7 @@ case class BoomCoreParams(
   enableTwoStageHTW: Boolean = false,
   enableHandleTracing: Boolean = false,
   enableStateTracing: Boolean = false,
+  enableHTLBSetCounters: Boolean = false, // one PerfCounter per HTLB set (walks per set)
   HTWCacheSize: Int = 4,
   enableHTLBPhysAddr: Boolean = false,
 // DOC include end: BOOM Parameters
