@@ -706,6 +706,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   val exe_tlb_valid = Wire(Vec(memWidth, Bool()))
   val exe_htlb_valid = Wire(Vec(memWidth, Bool()))
+  val exe_dc_used    = Wire(Vec(memWidth, Bool())) // a scheduled op holds the dcache request slot
+  val exe_lcam_used  = Wire(Vec(memWidth, Bool()))
   for (w <- 0 until memWidth) {
     var htlb_avail = true.B
     var tlb_avail  = true.B
@@ -791,6 +793,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     }
     exe_htlb_valid(w) := !htlb_avail
     exe_tlb_valid(w) := !tlb_avail
+    exe_dc_used(w)   := !dc_avail
+    exe_lcam_used(w) := !lcam_avail
   }
   assert((memWidth == 1).B ||
     (!(will_fire_sfence.reduce(_||_) && !will_fire_sfence.reduce(_&&_)) &&
@@ -2014,6 +2018,43 @@ midas.targetutils.PerfCounter(
         hella_state := h_ready
       }
     }
+  }
+
+  //-------------------------------------------------------------
+  // LSU scheduler occupancy. These only observe state.
+  // will_fire counts operations that won the scheduler. A dcache op also needs
+  // io.dmem.req.ready to proceed; lsu_dmem_req_not_ready counts the cycles it does not.
+  // The description equals the label: thesis src/yukon/bench.py names result columns by description.
+  {
+    def count(name: String, v: Vec[Bool]) = midas.targetutils.PerfCounter(v.reduce(_||_), name, name)
+    count("lsu_will_fire_load_incoming",  will_fire_load_incoming)
+    count("lsu_will_fire_stad_incoming",  will_fire_stad_incoming)
+    count("lsu_will_fire_sta_incoming",   will_fire_sta_incoming)
+    count("lsu_will_fire_std_incoming",   will_fire_std_incoming)
+    count("lsu_will_fire_sfence",         will_fire_sfence)
+    count("lsu_will_fire_release",        will_fire_release)
+    count("lsu_will_fire_hella_incoming", will_fire_hella_incoming)
+    count("lsu_will_fire_hella_wakeup",   will_fire_hella_wakeup)
+    count("lsu_will_fire_load_retry",     will_fire_load_retry)
+    count("lsu_will_fire_sta_retry",      will_fire_sta_retry)
+    count("lsu_will_fire_load_wakeup",    will_fire_load_wakeup)
+    count("lsu_will_fire_store_commit",   will_fire_store_commit)
+    count("lsu_tlb_used",  exe_tlb_valid)
+    count("lsu_dc_used",   exe_dc_used)
+    count("lsu_lcam_used", exe_lcam_used)
+    // Ready ops that lost the scheduler this cycle.
+    count("lsu_lost_hella_incoming", VecInit((0 until memWidth).map(w => can_fire_hella_incoming(w) && !will_fire_hella_incoming(w))))
+    count("lsu_lost_load_retry",     VecInit((0 until memWidth).map(w => can_fire_load_retry(w)     && !will_fire_load_retry(w))))
+    count("lsu_lost_sta_retry",      VecInit((0 until memWidth).map(w => can_fire_sta_retry(w)      && !will_fire_sta_retry(w))))
+    count("lsu_lost_load_wakeup",    VecInit((0 until memWidth).map(w => can_fire_load_wakeup(w)    && !will_fire_load_wakeup(w))))
+    count("lsu_lost_store_commit",   VecInit((0 until memWidth).map(w => can_fire_store_commit(w)   && !will_fire_store_commit(w))))
+    midas.targetutils.PerfCounter(io.dmem.req.valid && !io.dmem.req.ready, "lsu_dmem_req_not_ready", "lsu_dmem_req_not_ready")
+    // Causes of hella s2_nack (h_s1 -> h_s2_nack): the scheduler or the dcache refused the request.
+    val hella_s1 = hella_state === h_s1 && !io.hellacache.s1_kill
+    val hella_s1_fired = will_fire_hella_incoming(memWidth-1)
+    midas.targetutils.PerfCounter(hella_s1 && !hella_s1_fired, "lsu_hella_s1_lost_sched", "lsu_hella_s1_lost_sched")
+    midas.targetutils.PerfCounter(hella_s1 && hella_s1_fired && !dmem_req_fire(memWidth-1),
+      "lsu_hella_s1_lost_dcache", "lsu_hella_s1_lost_dcache")
   }
 
   //-------------------------------------------------------------
