@@ -33,6 +33,7 @@ class TLBHTLBResp(implicit p: Parameters) extends BoomBundle()(p) {
 // Events for PerfCounters in the LSU. Nothing in the HTLB reads these back.
 class HTLBPerfIO extends Bundle {
   val walk_start = Bool()
+  val walk_lane  = UInt(2.W) // the LSU lane whose miss started the walk (memWidth <= 2)
   val fill       = Bool()
 }
 
@@ -191,9 +192,10 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
   val timeline = new TimelineTracker()
 
-  // Utilities
-  val hm_enabled = !io.req(0).bits.passthrough
-  val hid = io.req(0).bits.haddr(xLen - 2, handleOffsetBits)
+  // Utilities. Every LSU lane (memWidth) has its own lookup port. There is one walker.
+  def widthMap[T <: Data](f: Int => T) = VecInit((0 until memWidth).map(f))
+  val hm_enabled = widthMap(w => !io.req(w).bits.passthrough)
+  val hid = widthMap(w => io.req(w).bits.haddr(xLen - 2, handleOffsetBits))
   val idxBits = log2Ceil(cfg.nSets)
 
   // L1 TLB Entries
@@ -201,18 +203,20 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
   val l1_plru = new SetAssocLRU(cfg.nSets, cfg.nWays, "plru")
 
-  // Hit Logic
-  val hid_tag = Split(hid, idxBits)._1
-  val hid_set = Split(hid, idxBits)._2
-  val htlb_hit = Wire(Bool())
-  val htlb_miss = Wire(Bool())
-  val real_hits = Wire(UInt(cfg.nWays.W))
-  val hitVec = Wire(Vec(cfg.nWays, Bool()))
+  // Hit Logic (per lane)
+  val hid_tag = widthMap(w => Split(hid(w), idxBits)._1)
+  val hid_set = widthMap(w => Split(hid(w), idxBits)._2)
+  val real_hits = widthMap(w => VecInit(entries(hid_set(w)).map(hm_enabled(w) && _.hit(hid_tag(w)))).asUInt)
+  val htlb_hit = widthMap(w => real_hits(w).orR)
+  val htlb_miss = widthMap(w => hm_enabled(w) && !htlb_hit(w))
 
-  hitVec := entries(hid_set).map(hm_enabled && _.hit(hid_tag))
-  real_hits := hitVec.asUInt
-  htlb_hit := real_hits.orR
-  htlb_miss := hm_enabled && !htlb_hit
+  // Walker arbitration: the lowest lane that misses starts the walk. A miss on
+  // another lane in the same cycle reports a miss and retries, as a miss while
+  // the walker is busy does.
+  val lane_miss = widthMap(w => io.req(w).fire && htlb_miss(w))
+  val any_miss  = lane_miss.asUInt.orR
+  val walk_lane = if (memWidth == 1) 0.U else PriorityEncoder(lane_miss.asUInt)
+  val walk_hid  = hid(walk_lane)
 
   // The PLRU is updated after the fill target (r_idx, repl_way) is known, below.
 
@@ -323,10 +327,10 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
   // Consider the number of times the HTLB is not ready (that is, it is dealing with a miss, blocking the LSU)
   midas.targetutils.PerfCounter(state =/= s_ready, "htlb_waiting", "htlb_waiting")
-  midas.targetutils.PerfCounter(io.req(0).fire && htlb_miss, "htlb_miss", "htlb_miss")
-  midas.targetutils.PerfCounter(io.req(0).fire && htlb_hit && hm_enabled, "htlb_hit", "htlb_hit")
+  midas.targetutils.PerfCounter(PopCount(lane_miss), "htlb_miss", "htlb_miss")
+  midas.targetutils.PerfCounter(PopCount(widthMap(w => io.req(w).fire && htlb_hit(w) && hm_enabled(w))), "htlb_hit", "htlb_hit")
   midas.targetutils.PerfCounter(state === s_request_ht_directory || state === s_request_ht_entry, "htlb_mem_stall_cycles", "htlb_mem_stall_cycles")
-  midas.targetutils.PerfCounter(io.req(0).fire && htlb_miss && l0_hit_in_s_ready, "htlb_l0_hit", "htlb_l0_hit")
+  midas.targetutils.PerfCounter(any_miss && l0_hit_in_s_ready, "htlb_l0_hit", "htlb_l0_hit")
   midas.targetutils.PerfCounter(state === s_wait_ht_directory || state === s_wait_ht_entry, "htlb_mem_wait_cycles", "htlb_mem_wait_cycles")
 
   for (s <- 0 until cfg.nSets) {
@@ -353,13 +357,13 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
   // Update PLRU on a hit and on a fill. real_hits is one-hot, so use OHToUInt
   // (OH1ToUInt gave way k+1). A fill marks the new entry as recently used, so
-  // the next fill in the set does not evict it before the retry. If both go to
-  // the same set in one cycle, the fill is applied last.
-  val plru_hit  = io.req(0).valid && hm_enabled && real_hits.orR
+  // the next fill in the set does not evict it before the retry. access()
+  // applies the updates in order: lane 0, lane 1, ..., then the fill last.
+  val plru_hit  = widthMap(w => io.req(w).valid && hm_enabled(w) && real_hits(w).orR)
   val plru_fill = state === s_wait_ht_entry && mem_resp_valid
   l1_plru.access(
-    Seq(hid_set, r_idx),
-    Seq(Pipe(plru_hit, OHToUInt(real_hits), 0), Pipe(plru_fill, repl_way, 0)))
+    hid_set :+ r_idx,
+    (0 until memWidth).map(w => Pipe(plru_hit(w), OHToUInt(real_hits(w)), 0)) :+ Pipe(plru_fill, repl_way, 0))
 
   switch(state) {
 
@@ -368,44 +372,44 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     is(s_ready) {
       // Prioritize invalidation over handling a miss
       when(do_htInval) {
-      } .elsewhen(io.req(0).fire && htlb_miss) {
-        hid_req := hid
+      } .elsewhen(any_miss) {
+        hid_req := walk_hid
 
         // if (boomParams.enableStateTracing) {
           midas.targetutils.SynthesizePrintf(
             printf("HTLB.miss: cycle=%d hid=0x%x htBase=0x%x\n",
-              timeline.cycle, hid, io.htBase)
+              timeline.cycle, walk_hid, io.htBase)
           )
         // }
 
         if (twoStageHTW) {
           val cache = ht_directory_cache.get
-          val l0_idx = getIndex(hid)
-          val l0_tag = getTag(hid)
+          val l0_idx = getIndex(walk_hid)
+          val l0_tag = getTag(walk_hid)
           val l0_entry = cache(l0_idx)
           val l0_hit = l0_entry.valid && l0_entry.tag === l0_tag
 
           when(l0_hit) {
             l0_hit_in_s_ready := true.B
             inner_walk_base := l0_entry.data
-            walk_addr := l0_entry.data + (hid(entries_per_ht_bits - 1, 0)) * 8.U
+            walk_addr := l0_entry.data + (walk_hid(entries_per_ht_bits - 1, 0)) * 8.U
             io.mem.req.valid := true.B
             when(io.mem.req.fire) {
               midas.targetutils.SynthesizePrintf(
                 printf("HTLB.walk.entry: cycle=%d hid=0x%x addr=0x%x (L0 hit)\n",
-                  timeline.cycle, hid, walk_addr)
+                  timeline.cycle, walk_hid, walk_addr)
               )
               next_state := s_wait_ht_entry
             }.otherwise {
               next_state := s_request_ht_entry
             }
           }.otherwise {
-            walk_addr := io.htBase + (hid >> entries_per_ht_bits) * 8.U
+            walk_addr := io.htBase + (walk_hid >> entries_per_ht_bits) * 8.U
             io.mem.req.valid := true.B
             when(io.mem.req.fire) {
               midas.targetutils.SynthesizePrintf(
                 printf("HTLB.walk.dir: cycle=%d hid=0x%x addr=0x%x\n",
-                  timeline.cycle, hid, walk_addr)
+                  timeline.cycle, walk_hid, walk_addr)
               )
               next_state := s_wait_ht_directory
             }.otherwise {
@@ -413,7 +417,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
             }
           }
         } else {
-          walk_addr := io.htBase + hid * 8.U
+          walk_addr := io.htBase + walk_hid * 8.U
           io.mem.req.valid := true.B
           when(io.mem.req.fire) {
             next_state := s_wait_ht_entry
@@ -546,53 +550,54 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
   val paddr_opt_enabled = boomParams.enableHTLBPhysAddr.B
 
-  val entry_data =
-    entries(hid_set)(OHToUInt(real_hits)).data.asTypeOf(new HTLBEntryData)
-  val addr = entry_data.addr
-  val phys = entry_data.phys
-  val try_phys = entry_data.try_phys && !entry_data.phys && paddr_opt_enabled
-
-  val addr_crossed_pages =
-    (addr + io.req(0).bits.haddr(handleOffsetBits - 1, 0))(
-      vaddrBits - 1,
-      pgIdxBits
-    ) =/= addr(vaddrBits - 1, pgIdxBits)
-
   io.miss_rdy := state === s_ready
 
-  val sum = io.req(0).bits.haddr
-  val ea_sign = Mux(
-    sum(vaddrBits - 1),
-    ~sum(63, vaddrBits) === 0.U,
-    sum(63, vaddrBits) =/= 0.U
-  )
-  val effective_address = Cat(ea_sign, sum(vaddrBits - 1, 0)).asUInt
-  val cross_pages = WireDefault(false.B)
+  for (w <- 0 until memWidth) {
+    val entry_data =
+      entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData)
+    val addr = entry_data.addr
+    val phys = entry_data.phys
+    val try_phys = entry_data.try_phys && !entry_data.phys && paddr_opt_enabled
 
-  io.req(0).ready := true.B
-  io.resp(0).miss := htlb_miss || (htlb_hit && cross_pages && phys)
+    val addr_crossed_pages =
+      (addr + io.req(w).bits.haddr(handleOffsetBits - 1, 0))(
+        vaddrBits - 1,
+        pgIdxBits
+      ) =/= addr(vaddrBits - 1, pgIdxBits)
 
-  io.resp(0).addr := Mux(
-    !hm_enabled,
-    effective_address,
-    Mux(
-      !io.resp(0).miss,
-      addr + io.req(0).bits.haddr(handleOffsetBits - 1, 0),
-      0.U
+    val sum = io.req(w).bits.haddr
+    val ea_sign = Mux(
+      sum(vaddrBits - 1),
+      ~sum(63, vaddrBits) === 0.U,
+      sum(63, vaddrBits) =/= 0.U
     )
-  )
-  io.resp(0).phys := Mux(hm_enabled && htlb_hit, phys, false.B)
-  io.resp(0).try_phys := Mux(
-    hm_enabled && htlb_hit,
-    try_phys && !cross_pages,
-    false.B
-  )
+    val effective_address = Cat(ea_sign, sum(vaddrBits - 1, 0)).asUInt
 
-  // Cross page logic
-  val could_return_phys = hm_enabled && (htlb_hit && (try_phys || phys))
-  cross_pages := could_return_phys && addr_crossed_pages
-  when(could_return_phys && addr_crossed_pages) {
-    entries(hid_set)(OHToUInt(real_hits)).inval_try_phys()
+    // Cross page logic
+    val could_return_phys = hm_enabled(w) && (htlb_hit(w) && (try_phys || phys))
+    val cross_pages = could_return_phys && addr_crossed_pages
+    when(cross_pages) {
+      entries(hid_set(w))(OHToUInt(real_hits(w))).inval_try_phys()
+    }
+
+    io.req(w).ready := true.B
+    io.resp(w).miss := htlb_miss(w) || (htlb_hit(w) && cross_pages && phys)
+
+    io.resp(w).addr := Mux(
+      !hm_enabled(w),
+      effective_address,
+      Mux(
+        !io.resp(w).miss,
+        addr + io.req(w).bits.haddr(handleOffsetBits - 1, 0),
+        0.U
+      )
+    )
+    io.resp(w).phys := Mux(hm_enabled(w) && htlb_hit(w), phys, false.B)
+    io.resp(w).try_phys := Mux(
+      hm_enabled(w) && htlb_hit(w),
+      try_phys && !cross_pages,
+      false.B
+    )
   }
 
   // ------------------------------------------------------------------------------------------------
@@ -601,13 +606,15 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   // ------------------------------------------------------------------------------------------------
   // ------------------------------------------------------------------------------------------------
 
-  // Tie off TLB updates
-  when(io.tlb(0).valid) {
-    val (paddr_hid_tag, paddr_hid_set) = Split(io.tlb(0).bits.hid, idxBits)
-    val hitVecPAddr = entries(paddr_hid_set).map(_.hit(paddr_hid_tag))
-    entries(paddr_hid_set)(OHToUInt(hitVecPAddr)).set_paddr(
-      io.tlb(0).bits.paddr
-    )
+  // Physical address updates from the DTLB, one per lane
+  for (w <- 0 until memWidth) {
+    when(io.tlb(w).valid) {
+      val (paddr_hid_tag, paddr_hid_set) = Split(io.tlb(w).bits.hid, idxBits)
+      val hitVecPAddr = entries(paddr_hid_set).map(_.hit(paddr_hid_tag))
+      entries(paddr_hid_set)(OHToUInt(hitVecPAddr)).set_paddr(
+        io.tlb(w).bits.paddr
+      )
+    }
   }
 
   // Reset
@@ -659,12 +666,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   // ------------------------------------------------------------------------------------------------
   // ------------------------------------------------------------------------------------------------
 
-  val walk_start = state === s_ready && io.htlb_enabled && !do_htInval &&
-                   io.req(0).fire && htlb_miss
+  val walk_start = state === s_ready && io.htlb_enabled && !do_htInval && any_miss
   val fill       = state === s_wait_ht_entry && mem_resp_valid
   val waiting    = state =/= s_ready
 
   io.perf.walk_start := walk_start
+  io.perf.walk_lane  := walk_lane
   io.perf.fill       := fill
 
   // Walks
@@ -689,13 +696,17 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
   // Lost entries. "used" is set on a hit and cleared on a fill. The fill write is last, so a fill wins.
   val used = RegInit(VecInit(Seq.fill(cfg.nSets)(VecInit(Seq.fill(cfg.nWays)(false.B)))))
-  when(io.req(0).valid && htlb_hit) { used(hid_set)(OHToUInt(real_hits)) := true.B }
+  for (w <- 0 until memWidth) {
+    when(io.req(w).valid && htlb_hit(w)) { used(hid_set(w))(OHToUInt(real_hits(w))) := true.B }
+  }
   when(fill) { used(r_idx)(repl_way) := false.B }
 
   val victim_valid = entries(r_idx)(repl_way).valid
   val victim_used  = used(r_idx)(repl_way)
   val inval_all    = io.htInval === ((BigInt(1) << handleBits) - 1).U
-  val miss_busy    = io.req(0).fire && htlb_miss && waiting
+  val miss_busy    = widthMap(w => lane_miss(w) && waiting)
+  // Misses in the cycle a walk starts that did not start it (a lower lane did).
+  val miss_walker_taken = widthMap(w => lane_miss(w) && walk_start && walk_lane =/= w.U)
 
   midas.targetutils.PerfCounter(fill && victim_valid, "htlb_evict_valid", "htlb_evict_valid")
   midas.targetutils.PerfCounter(fill && victim_valid && !victim_used, "htlb_evict_unused", "htlb_evict_unused")
@@ -703,12 +714,13 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   midas.targetutils.PerfCounter(do_htInval && !inval_all, "htlb_inval_one", "htlb_inval_one")
   midas.targetutils.PerfCounter(do_htInval && inval_all, "htlb_inval_all", "htlb_inval_all")
   midas.targetutils.PerfCounter(io.htInval.orR && waiting, "htlb_inval_wait", "htlb_inval_wait")
-  midas.targetutils.PerfCounter(miss_busy && hid === hid_req, "htlb_miss_busy_same", "htlb_miss_busy_same")
-  midas.targetutils.PerfCounter(miss_busy && hid =/= hid_req, "htlb_miss_busy_other", "htlb_miss_busy_other")
+  midas.targetutils.PerfCounter(PopCount(widthMap(w => miss_busy(w) && hid(w) === hid_req)), "htlb_miss_busy_same", "htlb_miss_busy_same")
+  midas.targetutils.PerfCounter(PopCount(widthMap(w => miss_busy(w) && hid(w) =/= hid_req)), "htlb_miss_busy_other", "htlb_miss_busy_other")
+  midas.targetutils.PerfCounter(PopCount(miss_walker_taken), "htlb_miss_walker_taken", "htlb_miss_walker_taken")
 
   if (boomParams.enableHTLBSetCounters) {
     for (s <- 0 until cfg.nSets) {
-      midas.targetutils.PerfCounter(walk_start && hid_set === s.U, s"htlb_walk_set$s", s"htlb_walk_set$s")
+      midas.targetutils.PerfCounter(walk_start && Split(walk_hid, idxBits)._2 === s.U, s"htlb_walk_set$s", s"htlb_walk_set$s")
     }
   }
 }

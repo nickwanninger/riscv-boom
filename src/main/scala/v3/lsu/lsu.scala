@@ -922,7 +922,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   // HTLB retry and wrong-path PerfCounters (see thesis todo/01-htlb-counters.md). These only observe state.
   // The description equals the label: thesis src/yukon/bench.py names result columns by description.
-  // HTLBSimple serves lane 0 only, so these use lane 0 (memWidth == 1 in all Yukon configs that build).
+  // HTLBSimple has one lookup port per lane and one walker; htlb.io.perf.walk_lane names the lane
+  // whose miss started the walk.
   {
     def isHandleAddr(a: UInt) = a(63) && !a(62)
     val htlb_rdy = RegNext(htlb.io.miss_rdy)
@@ -939,9 +940,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     midas.targetutils.PerfCounter(ld_handle_retry && !htlb_rdy && other_virtual_ld,
       "lsu_retry_hol_blocked", "lsu_retry_hol_blocked")
 
-    val is_retry = will_fire_load_retry(0) || will_fire_sta_retry(0)
-    midas.targetutils.PerfCounter(is_retry && htlb.io.req(0).valid && !exe_htlb_passthr(0) && htlb.io.resp(0).miss,
-      "lsu_handle_retry_miss", "lsu_handle_retry_miss")
+    val retry_miss = widthMap(w => (will_fire_load_retry(w) || will_fire_sta_retry(w)) &&
+                                   htlb.io.req(w).valid && !exe_htlb_passthr(w) && htlb.io.resp(w).miss)
+    midas.targetutils.PerfCounter(PopCount(retry_miss), "lsu_handle_retry_miss", "lsu_handle_retry_miss")
 
     // The uop in the HTLB stage in the walk_start cycle started the walk.
     val walk_valid  = RegInit(false.B)
@@ -949,8 +950,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     val walk_brmask = Reg(UInt(maxBrCount.W))
     when (htlb.io.perf.walk_start) {
       walk_valid  := true.B
-      walk_brmask := GetNewBrMask(io.core.brupdate, exe_tlb_uop(0))
-      walk_killed := IsKilledByBranch(io.core.brupdate, exe_tlb_uop(0)) || io.core.exception
+      val walk_uop = if (memWidth == 1) exe_tlb_uop(0) else exe_tlb_uop(htlb.io.perf.walk_lane(log2Ceil(memWidth) - 1, 0))
+      walk_brmask := GetNewBrMask(io.core.brupdate, walk_uop)
+      walk_killed := IsKilledByBranch(io.core.brupdate, walk_uop) || io.core.exception
     } .elsewhen (walk_valid) {
       walk_brmask := GetNewBrMask(io.core.brupdate, walk_brmask)
       when (IsKilledByBranch(io.core.brupdate, walk_brmask) || io.core.exception) {
