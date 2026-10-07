@@ -130,12 +130,19 @@ class WithStateTracing extends Config((site, here, up) => {
   }
 })
 
-class WithHTLBPhysAddr extends Config((site, here, up) => {
-
+/**
+ * Two-wide memory issue (memWidth = 2) for any v3 BOOM tile, as in WithNLargeBooms2Mem:
+ * the MEM issue queue issues 2 per cycle and the dcache has 2 data banks.
+ * HTLBSimple requires memWidth == 1, so Yukon configs with this mixin do not elaborate.
+ */
+class WithBoomMemWidth2 extends Config((site, here, up) => {
   case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
     case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
-      enableHTLBPhysAddr = true
+      issueParams = tp.tileParams.core.issueParams.map(ip =>
+        if (ip.iqType == IQT_MEM.litValue) ip.copy(issueWidth = 2) else ip),
+      numDCacheBanks = 2
     )))
+    case other => other
   }
 })
 
