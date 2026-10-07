@@ -140,7 +140,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   val priv = if (instruction) io.ptw.status.prv else io.ptw.status.dprv
   val priv_s = priv(0)
   val priv_uses_vm = priv <= PRV.S.U
-  val vm_enabled = widthMap(w => usingVM.B && io.ptw.ptbr.mode(io.ptw.ptbr.mode.getWidth-1) && priv_uses_vm && !io.req(w).bits.passthrough && !io.req(w).bits.htlb_passthrough)
+  val vm_enabled = widthMap(w => usingVM.B && io.ptw.ptbr.mode(io.ptw.ptbr.mode.getWidth-1) && priv_uses_vm && !io.req(w).bits.passthrough)
 
   val timeline = new TimelineTracker()
   timeline.trackState("tlb.state", "ready", state === s_ready)
@@ -324,7 +324,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   for (w <- 0 until memWidth) {
     if (boomParams.enableStateTracing) {
       when (tlb_hit(w) && vm_enabled(w) && io.htlb_enabled && io.req(w).bits.vaddr =/= 0.U && io.resp(w).paddr =/= 0.U) {
-        midas.targetutils.SynthesizePrintf(printf("T%x,%x,%d,%d,%d\n", io.req(w).bits.vaddr, io.resp(w).paddr, io.req(w).bits.handle, io.req(w).bits.passthrough, io.req(w).bits.htlb_passthrough))
+        midas.targetutils.SynthesizePrintf(printf("T%x,%x,%d,%d\n", io.req(w).bits.vaddr, io.resp(w).paddr, io.req(w).bits.handle, io.req(w).bits.passthrough))
       }
       when (tlb_hit(w) && io.htlb_enabled && io.req(w).bits.vaddr =/= 0.U) {
         midas.targetutils.SynthesizePrintf(printf("Tdebug:%d,%x\n", vm_enabled(w), io.resp(w).paddr))

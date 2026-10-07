@@ -977,14 +977,15 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     dtlb.io.req(w).bits.size        := exe_size(w)
     dtlb.io.req(w).bits.cmd         := exe_cmd(w)
     dtlb.io.req(w).bits.passthrough := exe_passthr(w)
-    dtlb.io.req(w).bits.htlb_passthrough := Mux(!exe_htlb_miss(w), htlb.io.resp(w).phys, false.B)
+    // The shared Rocket request retains this field for v4.
+    dtlb.io.req(w).bits.htlb_passthrough := false.B
     dtlb.io.req(w).bits.v           := io.ptw.status.v
     dtlb.io.req(w).bits.prv         := io.ptw.status.prv
     dtlb.io.req(w).bits.handle      := exe_is_handle(w)
 
     if (boomParams.enableStateTracing) {
       when (dtlb.io.req(w).valid && htlb_enabled) {
-        midas.targetutils.SynthesizePrintf(printf("t(%d%d)%x,%d,%d,%d\n", isRead(exe_cmd(w)), isWrite(exe_cmd(w)), dtlb.io.req(w).bits.vaddr, dtlb.io.req(w).bits.htlb_passthrough, dtlb.io.req(w).bits.passthrough, dtlb.io.req(w).bits.handle))
+        midas.targetutils.SynthesizePrintf(printf("t(%d%d)%x,%d,%d\n", isRead(exe_cmd(w)), isWrite(exe_cmd(w)), dtlb.io.req(w).bits.vaddr, dtlb.io.req(w).bits.passthrough, dtlb.io.req(w).bits.handle))
       }
     }
   }
@@ -1033,8 +1034,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   midas.targetutils.PerfCounter(widthMap(w => dtlb.io.req(w).valid && is_handle(w)).reduce(_ || _), "l1_dtlb_accesses_from_handle_translations", "l1_dtlb_accesses_from_handle_translations")
   midas.targetutils.PerfCounter(widthMap(w => dtlb.io.req(w).valid).reduce(_ || _), "l1_dtlb_accesses", "l1_dtlb_accesses")
-  midas.targetutils.PerfCounter(widthMap(w => dtlb.io.req(w).valid && dtlb.io.req(w).bits.passthrough && !dtlb.io.req(w).bits.htlb_passthrough).reduce(_ || _), "l1_dtlb_dtlb_passthrough", "l1_dtlb_dtlb_passthrough")
-  midas.targetutils.PerfCounter(widthMap(w => dtlb.io.req(w).valid && !dtlb.io.req(w).bits.passthrough && dtlb.io.req(w).bits.htlb_passthrough).reduce(_ || _), "l1_dtlb_htlb_passthrough", "l1_dtlb_htlb_passthrough")
+  midas.targetutils.PerfCounter(widthMap(w => dtlb.io.req(w).valid && dtlb.io.req(w).bits.passthrough).reduce(_ || _), "l1_dtlb_dtlb_passthrough", "l1_dtlb_dtlb_passthrough")
   midas.targetutils.PerfCounter(widthMap(w => (will_fire_load_retry(w) || will_fire_sta_retry(w)) && dtlb.io.req(w).valid).reduce(_ || _), "l1_dtlb_retries", "l1_dtlb_retries")
   midas.targetutils.PerfCounter(widthMap(w => (will_fire_load_incoming(w) || will_fire_sta_incoming(w) || will_fire_stad_incoming(w) || will_fire_std_incoming(w)) && dtlb.io.req(w).valid).reduce(_ || _), "l1_dtlb_incoming", "l1_dtlb_incoming")
 
@@ -1086,24 +1086,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val exe_tlb_miss  = widthMap(w => exe_tlb_valid(w) && (dtlb.io.resp(w).miss || exe_htlb_miss(w) || !dtlb.io.req(w).ready))
   val exe_tlb_paddr = widthMap(w => Cat(dtlb.io.resp(w).paddr(paddrBits-1,corePgIdxBits), exe_tlb_vaddr(w)(corePgIdxBits-1,0)))
   val exe_tlb_uncacheable = widthMap(w => !(dtlb.io.resp(w).cacheable))
-  val small_handle_criterium = widthMap(w => !exe_htlb_passthr(w) && !htlb.io.resp(w).phys && htlb.io.resp(w).try_phys && exe_is_handle(w))
 
   for (w <- 0 until memWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr || exe_req(w).bits.sfence.valid, "[lsu] paddrs should match.")
-
-    // htlb.io.tlb(w).valid := dtlb.io.req(w).valid && !exe_tlb_miss(w) && small_handle_criterium(w)
-    // val paddr_valid = exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits) =/= exe_tlb_vaddr(w)(paddrBits-1, corePgIdxBits) && exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits) =/= 0.U
-
-    val paddr_valid = exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits) =/= exe_tlb_vaddr(w)(paddrBits-1, corePgIdxBits) && exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits) =/= 0.U && !mem_xcpt_valids(w)
-    htlb.io.tlb(w).valid := dtlb.io.req(w).valid && paddr_valid && small_handle_criterium(w)
-    htlb.io.tlb(w).bits.hid := exe_htlb_vaddr(w)(xLen-2, handleOffsetBits)
-    htlb.io.tlb(w).bits.paddr := exe_tlb_paddr(w) - exe_htlb_vaddr(w)(handleBits - 1, 0)
-
-    // when (htlb.io.tlb(w).valid) {
-    //   // midas.targetutils.SynthesizePrintf(printf("htDebug:%x,%x,%d,%d,%d\n", exe_tlb_paddr(w), exe_tlb_vaddr(w), paddr_valid, small_handle_criterium(w), dtlb.io.req(w).valid))
-    //   midas.targetutils.SynthesizePrintf(printf("htDebug:%x,%x,%x,%x,%d,%d\n", exe_tlb_paddr(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)(paddrBits-1, corePgIdxBits), exe_tlb_vaddr(w)(paddrBits-1, corePgIdxBits), small_handle_criterium(w), dtlb.io.req(w).valid))
-    //   midas.targetutils.SynthesizePrintf(printf("ht:%d,%x,%x\n", htlb.io.tlb(w).valid, htlb.io.tlb(w).bits.hid, htlb.io.tlb(w).bits.paddr))
-    // }
 
     when (mem_xcpt_valids(w))
     {
@@ -1236,7 +1221,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       ldq(ldq_idx).bits.addr.valid          := true.B
       ldq(ldq_idx).bits.addr.bits           := Mux(exe_htlb_miss(w), exe_htlb_vaddr(w), Mux(exe_tlb_miss(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)))
       ldq(ldq_idx).bits.uop.pdst            := exe_tlb_uop(w).pdst
-      ldq(ldq_idx).bits.addr_is_virtual     := exe_tlb_miss(w) && !Mux(!exe_htlb_miss(w), htlb.io.resp(w).phys, false.B)
+      ldq(ldq_idx).bits.addr_is_virtual     := exe_tlb_miss(w)
       ldq(ldq_idx).bits.addr_is_uncacheable := exe_tlb_uncacheable(w) && !exe_tlb_miss(w)
       ldq(ldq_idx).bits.is_handle           := exe_is_handle(w)
 
@@ -1253,7 +1238,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       stq(stq_idx).bits.addr.valid := !pf_st(w) // Prevent AMOs from executing!
       stq(stq_idx).bits.addr.bits  := Mux(exe_htlb_miss(w), exe_htlb_vaddr(w), Mux(exe_tlb_miss(w), exe_tlb_vaddr(w), exe_tlb_paddr(w)))
       stq(stq_idx).bits.uop.pdst   := exe_tlb_uop(w).pdst // Needed for AMOs
-      stq(stq_idx).bits.addr_is_virtual := exe_tlb_miss(w) && !Mux(!exe_htlb_miss(w), htlb.io.resp(w).phys, false.B)
+      stq(stq_idx).bits.addr_is_virtual := exe_tlb_miss(w)
       stq(stq_idx).bits.is_handle       := exe_is_handle(w)
       assert(!(will_fire_sta_incoming(w) && stq_incoming_e(w).bits.addr.valid),
         "[lsu] Incoming store is overwriting a valid address")
@@ -1323,11 +1308,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val mem_stdf_uop         = RegNext(UpdateBrMask(io.core.brupdate, io.core.fp_stdata.bits.uop))
 
 
-  val mem_tlb_miss             = if (ENABLE_PHT > 0) {
-    widthMap(w => RegNext(exe_tlb_miss(w) && !Mux(!exe_htlb_miss(w), htlb.io.resp(w).phys, false.B)))
-  } else {
-    widthMap(w => RegNext(exe_tlb_miss(w)) && !fired_hella_incoming(w))
-  }
+  // Every use below is ANDed with a load or store that fired on the same lane.
+  // A hella request needs the same lane's TLB slot, so it never fires with one,
+  // and masking fired_hella_incoming here would not change any result.
+  val mem_tlb_miss             = widthMap(w => RegNext(exe_tlb_miss(w)))
   val mem_tlb_uncacheable      = RegNext(exe_tlb_uncacheable)
   val mem_paddr                = RegNext(widthMap(w => dmem_req(w).bits.addr))
 
@@ -1342,7 +1326,6 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     clr_bsy_brmask  (w) := 0.U
 
 
-    // NOTE: maybe these mem_tlb_miss also need to be changed?
     when (fired_stad_incoming(w)) {
       clr_bsy_valid   (w) := mem_stq_incoming_e(w).valid           &&
                             !mem_tlb_miss(w)                       &&

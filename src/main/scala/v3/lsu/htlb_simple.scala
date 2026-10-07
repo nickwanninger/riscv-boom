@@ -21,13 +21,6 @@ class HTLBReq(implicit p: Parameters) extends BoomBundle()(p) {
 class HTLBResp(implicit p: Parameters) extends BoomBundle()(p) {
   val addr = UInt(maxSVAddrBits.W)
   val miss = Bool()
-  val phys = Bool()
-  val try_phys = Bool()
-}
-
-class TLBHTLBResp(implicit p: Parameters) extends BoomBundle()(p) {
-  val hid = UInt(handleBits.W)
-  val paddr = UInt(maxSVAddrBits.W)
 }
 
 // Events for PerfCounters in the LSU. Nothing in the HTLB reads these back.
@@ -43,10 +36,8 @@ case class HTLBConfig(
 )
 
 class HTE(implicit p: Parameters) extends BoomBundle()(p) {
-  val phys = Bool()
-  val try_phys = Bool()
-  val reserved = UInt((64 - maxSVAddrBits - 2).W)
-  val addr = UInt(maxSVAddrBits.W)
+  val reserved = UInt((64 - maxSVAddrBits).W)
+  val addr = UInt(maxSVAddrBits.W) // Virtual object base; upper bits are ignored.
 }
 
 class TopLevelCacheEntry(implicit p: Parameters) extends BoomBundle()(p) {
@@ -117,7 +108,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   val io = IO(new Bundle {
     val req = Flipped(Vec(memWidth, Decoupled(new HTLBReq)))
     val resp = Vec(memWidth, new HTLBResp)
-    val tlb = Flipped(Vec(memWidth, Valid(new TLBHTLBResp)))
     val mem = new HellaCacheIO
     val htDump = Input(UInt(maxSVAddrBits.W))
     val htInval = Input(UInt(handleBits.W))
@@ -143,9 +133,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   // ------------------------------------------------------------------------------------------------
 
   class HTLBEntryData() extends Bundle() {
-    val phys = Bool()
-    val addr = UInt(maxSVAddrBits.W)
-    val try_phys = Bool()
+    val addr = UInt(maxSVAddrBits.W) // Virtual object base.
   }
 
   class Entry(nSets: Int) extends Bundle {
@@ -155,7 +143,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     val data = UInt(new HTLBEntryData().getWidth.W)
     val valid = Bool()
 
-    def getData() = data.asTypeOf(new HTLBEntryData)
     def hit(tag: UInt) = {
       valid && this.tag === tag
     }
@@ -168,24 +155,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     }
 
     def invalidate() = { valid := false.B }
-
-    def inval_try_phys(): Unit = {
-      val entry = getData()
-      entry.try_phys := false.B
-      when(entry.phys) {
-        valid := false.B
-      }.otherwise {
-        data := entry.asUInt
-      }
-    }
-
-    def set_paddr(paddr: UInt): Unit = {
-      val entry = getData()
-      entry.phys := true.B
-      entry.addr := paddr
-      entry.try_phys := false.B
-      data := entry.asUInt
-    }
   }
 
   val twoStageHTW = boomParams.enableTwoStageHTW
@@ -265,9 +234,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
         )
       )
     else None
-
-  val l0_lookup_idx = getIndex(hid_req)
-  val l0_lookup_tag = getTag(hid_req)
 
   // Hoisted wire so htlb_l0_hit PerfCounter can reference it outside the s_ready block
   val l0_hit_in_s_ready = WireDefault(false.B)
@@ -475,7 +441,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
           io.mem.req.valid := true.B
 
           when (io.mem.req.fire) {
-            midas.targetutils.PerfCounter(mem_resp_valid && io.mem.req.fire, "htlb_fast_path_fired", "htlb_fast_path_fired")
             next_state := s_wait_ht_entry
           } .otherwise {
             next_state := s_request_ht_entry
@@ -523,9 +488,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
         // No victim handling needed for simplificaiton, just overwrite
         val newEntry = Wire(new HTLBEntryData)
         val hte = mem_resp_data.asTypeOf(new HTE)
-        newEntry.phys := hte.phys
         newEntry.addr := hte.addr
-        newEntry.try_phys := hte.try_phys
 
         entries(r_idx)(repl_way).insert(r_tag, newEntry)
 
@@ -542,13 +505,16 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
   }
 
+  // Disable blocks new memory requests, but does not cancel accepted requests.
+  when(!io.htlb_enabled) {
+    io.mem.req.valid := false.B
+  }
+
   // ------------------------------------------------------------------------------------------------
   // ------------------------------------------------------------------------------------------------
   // Response & Output Logic
   // ------------------------------------------------------------------------------------------------
   // ------------------------------------------------------------------------------------------------
-
-  val paddr_opt_enabled = boomParams.enableHTLBPhysAddr.B
 
   io.miss_rdy := state === s_ready
 
@@ -556,15 +522,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     val entry_data =
       entries(hid_set(w))(OHToUInt(real_hits(w))).data.asTypeOf(new HTLBEntryData)
     val addr = entry_data.addr
-    val phys = entry_data.phys
-    val try_phys = entry_data.try_phys && !entry_data.phys && paddr_opt_enabled
-
-    val addr_crossed_pages =
-      (addr + io.req(w).bits.haddr(handleOffsetBits - 1, 0))(
-        vaddrBits - 1,
-        pgIdxBits
-      ) =/= addr(vaddrBits - 1, pgIdxBits)
-
     val sum = io.req(w).bits.haddr
     val ea_sign = Mux(
       sum(vaddrBits - 1),
@@ -573,15 +530,8 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     )
     val effective_address = Cat(ea_sign, sum(vaddrBits - 1, 0)).asUInt
 
-    // Cross page logic
-    val could_return_phys = hm_enabled(w) && (htlb_hit(w) && (try_phys || phys))
-    val cross_pages = could_return_phys && addr_crossed_pages
-    when(cross_pages) {
-      entries(hid_set(w))(OHToUInt(real_hits(w))).inval_try_phys()
-    }
-
     io.req(w).ready := true.B
-    io.resp(w).miss := htlb_miss(w) || (htlb_hit(w) && cross_pages && phys)
+    io.resp(w).miss := htlb_miss(w)
 
     io.resp(w).addr := Mux(
       !hm_enabled(w),
@@ -592,12 +542,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
         0.U
       )
     )
-    io.resp(w).phys := Mux(hm_enabled(w) && htlb_hit(w), phys, false.B)
-    io.resp(w).try_phys := Mux(
-      hm_enabled(w) && htlb_hit(w),
-      try_phys && !cross_pages,
-      false.B
-    )
   }
 
   // ------------------------------------------------------------------------------------------------
@@ -605,17 +549,6 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   // Tie-offs and unused IO
   // ------------------------------------------------------------------------------------------------
   // ------------------------------------------------------------------------------------------------
-
-  // Physical address updates from the DTLB, one per lane
-  for (w <- 0 until memWidth) {
-    when(io.tlb(w).valid) {
-      val (paddr_hid_tag, paddr_hid_set) = Split(io.tlb(w).bits.hid, idxBits)
-      val hitVecPAddr = entries(paddr_hid_set).map(_.hit(paddr_hid_tag))
-      entries(paddr_hid_set)(OHToUInt(hitVecPAddr)).set_paddr(
-        io.tlb(w).bits.paddr
-      )
-    }
-  }
 
   // Reset
   when(reset.asBool || io.clear_htlb) {
@@ -687,6 +620,8 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   midas.targetutils.PerfCounter(walk_start, "htlb_walk_start", "htlb_walk_start")
   if (twoStageHTW) {
     midas.targetutils.PerfCounter(walk_start && !l0_hit_in_s_ready, "htlb_walk_l0_miss", "htlb_walk_l0_miss")
+    midas.targetutils.PerfCounter(state === s_wait_ht_directory && mem_resp_valid && io.mem.req.fire,
+      "htlb_fast_path_fired", "htlb_fast_path_fired")
   }
   midas.targetutils.PerfCounter(fill, "htlb_fill", "htlb_fill")
   midas.targetutils.PerfCounter.identity(walk_max, "htlb_walk_lat_max", "htlb_walk_lat_max")
