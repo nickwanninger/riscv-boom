@@ -147,6 +147,23 @@ class WithBoomMemWidth2 extends Config((site, here, up) => {
 })
 
 /**
+ * Cortex-A72 L1 D-cache and TLB sizes (ARM 100095_0001_02_en, 1.3 and 2.1):
+ * 32KB 2-way L1D, 32-entry L1 DTLB, 48-entry L1 ITLB, 1024-entry 4-way L2 TLB.
+ * The A72 L1I (48KB 3-way) is not possible here: the BOOM ICache requires
+ * pow2 ways and at most 64 sets, so the L1I is unchanged.
+ */
+class WithBoomA72TLBsAndL1D extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(
+      core = tp.tileParams.core.copy(nL2TLBEntries = 1024, nL2TLBWays = 4),
+      dcache = tp.tileParams.dcache.map(_.copy(nSets = 256, nWays = 2, nTLBSets = 1, nTLBWays = 32)),
+      icache = tp.tileParams.icache.map(_.copy(nTLBSets = 1, nTLBWays = 48))
+    ))
+    case other => other
+  }
+})
+
+/**
  * 1-wide BOOM.
  */
 class WithNSmallBooms(n: Int = 1) extends Config(
