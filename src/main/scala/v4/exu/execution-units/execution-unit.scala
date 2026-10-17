@@ -285,11 +285,10 @@ class MemExeUnit(
     val load_ready = !pause_mem
     fu_types += ((FC_AGEN, load_ready, "AGen"))
 
-    // val sum = (exe_rs1_data.asSInt + exe_imm_data.asSInt).asUInt
-    // val ea_sign = Mux(sum(vaddrBits-1), ~sum(63,vaddrBits) === 0.U,
-    //                                      sum(63,vaddrBits) =/= 0.U)
-    // val effective_address = Cat(ea_sign, sum(vaddrBits-1,0)).asUInt
-    val effective_address = exe_rs1_data.asSInt + exe_imm_data.asSInt
+    val sum = (exe_rs1_data.asSInt + exe_imm_data.asSInt).asUInt
+    val ea_sign = Mux(sum(vaddrBits-1), ~sum(63,vaddrBits) === 0.U,
+                                         sum(63,vaddrBits) =/= 0.U)
+    val effective_address = Cat(ea_sign, sum(vaddrBits-1,0)).asUInt
 
     val agen = IO(Output(Valid(new MemGen)))
     if (enableAgenStage) {
@@ -300,13 +299,13 @@ class MemExeUnit(
         !IsKilledByBranch(io_brupdate, io_kill, exe_uop.bits)
       )
       agen_reg.bits.uop  := UpdateBrMask(io_brupdate, exe_uop.bits)
-      agen_reg.bits.data := effective_address.asUInt
+      agen_reg.bits.data := Sext(effective_address, xLen)
 
       agen := agen_reg
     } else {
       agen.valid     := exe_uop.valid && exe_uop.bits.fu_code(FC_AGEN)
       agen.bits.uop  := exe_uop.bits
-      agen.bits.data := effective_address.asUInt
+      agen.bits.data := Sext(effective_address, xLen)
     }
     Some(agen)
   } else {

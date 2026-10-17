@@ -136,7 +136,7 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   val priv = if (instruction) io.ptw.status.prv else io.ptw.status.dprv
   val priv_s = priv(0)
   val priv_uses_vm = priv <= PRV.S.U
-  val vm_enabled = widthMap(w => usingVM.B && io.ptw.ptbr.mode(io.ptw.ptbr.mode.getWidth-1) && priv_uses_vm && !io.req(w).bits.passthrough && !io.req(w).bits.htlb_passthrough)
+  val vm_enabled = widthMap(w => usingVM.B && io.ptw.ptbr.mode(io.ptw.ptbr.mode.getWidth-1) && priv_uses_vm && !io.req(w).bits.passthrough)
 
   // share a single physical memory attribute checker (unshare if critical path)
   val vpn = widthMap(w => io.req(w).bits.vaddr(vaddrBits-1, pgIdxBits))
@@ -318,7 +318,6 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   io.ptw.req.bits := DontCare
   io.ptw.req.bits.valid := !io.kill
   io.ptw.req.bits.bits.addr := r_refill_tag
-  io.ptw.l1miss := do_refill || tlb_miss.orR
 
   if (usingVM) {
     val sfence = io.sfence.valid

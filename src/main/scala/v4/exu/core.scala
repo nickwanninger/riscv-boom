@@ -43,8 +43,6 @@ import freechips.rocketchip.devices.tilelink.{PLICConsts, CLINTConsts}
 import boom.v4.common._
 import boom.v4.ifu.{GlobalHistory, HasBoomFrontendParameters}
 import boom.v4.util._
-import boom.v4.lsu.{DatapathHTWIO}
-import freechips.rocketchip.util.DataToAugmentedData
 
 /**
  * Top level core object that connects the Frontend to the rest of the pipeline.
@@ -59,7 +57,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     val interrupts = Input(new freechips.rocketchip.rocket.CoreInterrupts(false))
     val ifu = new boom.v4.ifu.BoomFrontendIO
     val ptw = Flipped(new freechips.rocketchip.rocket.DatapathPTWIO())
-    val htw = Flipped(new DatapathHTWIO())
     val rocc = Flipped(new freechips.rocketchip.tile.RoCCCoreIO())
     val lsu = Flipped(new boom.v4.lsu.LSUCoreIO)
     val ptw_tlb = new freechips.rocketchip.rocket.TLBPTWIO()
@@ -69,7 +66,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.ptw_tlb := DontCare
   io.ptw := DontCare
   io.ifu := DontCare
-  io.htw := DontCare
 
   //**********************************
   // construct all of the modules
@@ -294,10 +290,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       ("D$ release",  () => io.lsu.perf.release),
       ("ITLB miss",   () => io.ifu.perf.tlbMiss),
       ("DTLB miss",   () => io.lsu.perf.tlbMiss),
-      ("L2 TLB miss", () => io.ptw.perf.l2miss),
-      ("L1 HTLB miss", () => io.htw.perf.l1miss),
-      ("L2 HTLB miss", () => io.htw.perf.l2miss)))))
-      // ("L1 TLB miss", () => io.ptw.perf.l1miss)))))
+      ("L2 TLB miss", () => io.ptw.perf.l2miss)))))
   val csr = Module(new freechips.rocketchip.rocket.CSRFile(perfEvents, boomParams.customCSRs.decls))
   csr.io.inst foreach { c => c := DontCare }
   csr.io.rocc_interrupt := io.rocc.interrupt
@@ -309,27 +302,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   custom_csrs.csrs.foreach { c => c.stall := false.B; c.set := false.B; c.sdata := DontCare }
   (custom_csrs.csrs zip csr.io.customCSRs).map { case (lhs, rhs) => lhs <> rhs }
   io.ifu.enable_bpd := custom_csrs.enableBPD
-  io.htw.customCSRs <> custom_csrs
-
-  when (io.htw.htDumped && false.B) {
-    midas.targetutils.SynthesizePrintf(printf("[Core] HTLB Dumping Completed, interrupts should be re-enabled\n"))
-  }
-
-  when (io.htw.htInvald && false.B) {
-    midas.targetutils.SynthesizePrintf(printf("[Core] HTLBs Invalidation Completed\n"))
-  }
-
-  csr.io.customCSRs(2).set := io.htw.htDumped
-  csr.io.customCSRs(2).sdata := 0.U
-
-  csr.io.customCSRs(3).set := io.htw.htInvald
-  csr.io.customCSRs(3).sdata := 0.U
-
-  csr.io.customCSRs(5).set := io.lsu.perf.tlbMiss
-  csr.io.customCSRs(5).sdata := csr.io.customCSRs(5).value + 1.U
-
-  io.htw.clear_htlb := csr.io.clear_htlb
-  io.lsu.clear_htlb := csr.io.clear_htlb
 
   //val icache_blocked = !(io.ifu.fetchpacket.valid || RegNext(io.ifu.fetchpacket.valid))
   val icache_blocked = false.B
@@ -1377,27 +1349,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   coreMonitorBundle.clock  := clock
   coreMonitorBundle.reset  := reset
 
-
-  io.lsu.htBase := custom_csrs.htBase
-  io.lsu.htDump := custom_csrs.htDump
-  io.lsu.htInval := custom_csrs.htInval
-  io.lsu.htSize := custom_csrs.htSize
-
-  val printed_handle_tracing = RegInit(false.B)
-  val prev_handle_tracing = RegNext(custom_csrs.handleTracing)
-  when (custom_csrs.handleTracing =/= prev_handle_tracing) {
-    printed_handle_tracing := false.B
-  }
-  val should_trace = custom_csrs.handleTracing =/= 0.U
-  when (boomParams.enableHandleTracing.B && should_trace && !printed_handle_tracing) {
-    when (custom_csrs.handleTracing(63) === 0.U) {
-      midas.targetutils.SynthesizePrintf(printf("a%x\n", custom_csrs.handleTracing(62, 0)))
-      printed_handle_tracing := should_trace
-    } .elsewhen(custom_csrs.handleTracing(63) === 1.U) {
-      midas.targetutils.SynthesizePrintf(printf("f%x\n", custom_csrs.handleTracing(62, 0)))
-      printed_handle_tracing := should_trace
-    }
-  }
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------
