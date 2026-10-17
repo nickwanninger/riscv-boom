@@ -118,6 +118,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     val clear_htlb = Input(Bool())
     val miss_rdy = Output(Bool())
     val ht_size = Input(UInt(xLen.W))
+    val geom = Input(UInt(xLen.W)) // htlbGeom CSR: bits 3:0 = log2(ways), bits 11:8 = log2(sets)
     val htlb_enabled = Input(Bool())
     val pht_enabled = Input(Bool())
     val htInvald = Output(Bool())
@@ -138,9 +139,9 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
     val addr = UInt(maxSVAddrBits.W) // Virtual object base.
   }
 
+  // The tag is the full handle ID, so the set mask of the htlbGeom CSR loses no bits.
   class Entry(nSets: Int) extends Bundle {
-    val idxBits = log2Ceil(nSets)
-    val tagBits = handleBits - idxBits
+    val tagBits = handleBits
     val tag = UInt(tagBits.W)
     val data = UInt(new HTLBEntryData().getWidth.W)
     val valid = Bool()
@@ -168,20 +169,35 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   val hid = io.req(0).bits.haddr(xLen - 2, handleOffsetBits)
   val idxBits = log2Ceil(cfg.nSets)
 
+  // Active geometry from the htlbGeom CSR, for capacity sweeps with one build.
+  // Lookups and fills use only the low 2^ways_log2 ways and the low 2^sets_log2 sets.
+  // Values above the built geometry are clamped to it.
+  require(isPow2(cfg.nSets) && isPow2(cfg.nWays), "the htlbGeom CSR needs power-of-two sets and ways")
+  val waysBits = log2Ceil(cfg.nWays)
+  def clamp(v: UInt, max: Int) = Mux(v > max.U, max.U, v)
+  val ways_log2 = clamp(io.geom(3, 0), waysBits)
+  val sets_log2 = clamp(io.geom(11, 8), idxBits)
+  val way_mask  = VecInit((0 until cfg.nWays).map(w => w.U < (1.U << ways_log2))).asUInt
+  val set_mask  = ((1.U << sets_log2) - 1.U)
+  def setOf(h: UInt): UInt = if (idxBits == 0) 0.U else h(idxBits - 1, 0) & set_mask(idxBits - 1, 0)
+  // A geometry change invalidates all entries and resets the PLRU (see Reset below).
+  val geom_q       = RegNext(Cat(sets_log2, ways_log2), Cat(idxBits.U(4.W), waysBits.U(4.W)))
+  val geom_changed = geom_q =/= Cat(sets_log2, ways_log2)
+
   // L1 TLB Entries
   val entries = Reg(Vec(cfg.nSets, Vec(cfg.nWays, new Entry(cfg.nSets))))
 
   val l1_plru = new SetAssocLRU(cfg.nSets, cfg.nWays, "plru")
 
   // Hit Logic
-  val hid_tag = Split(hid, idxBits)._1
-  val hid_set = Split(hid, idxBits)._2
+  val hid_tag = hid
+  val hid_set = setOf(hid)
   val htlb_hit = Wire(Bool())
   val htlb_miss = Wire(Bool())
   val real_hits = Wire(UInt(cfg.nWays.W))
   val hitVec = Wire(Vec(cfg.nWays, Bool()))
 
-  hitVec := entries(hid_set).map(hm_enabled && _.hit(hid_tag))
+  hitVec := entries(hid_set).zipWithIndex.map { case (e, w) => hm_enabled && way_mask(w) && e.hit(hid_tag) }
   real_hits := hitVec.asUInt
   htlb_hit := real_hits.orR
   htlb_miss := hm_enabled && !htlb_hit
@@ -307,16 +323,26 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
 
 
   // Fill target. Hoisted out of s_wait_ht_entry so the PerfCounters can see the victim.
-  val (r_tag, r_idx) = Split(hid_req, idxBits)
-  // Use PLRU to pick way or first invalid
+  val r_tag = hid_req
+  val r_idx = setOf(hid_req)
+  // Use PLRU to pick way or first invalid. With 2^k active ways, the PLRU
+  // victim comes from the subtree of ways 0..2^k-1, which is state bits
+  // 2^k-2..0. Accesses to those ways update these bits as in a 2^k-way PLRU.
+  val plru_state = l1_plru.state_vec(r_idx)
+  val plru_logic = l1_plru.logic.asInstanceOf[PseudoLRU]
   val candidate_repl_way =
-    (if (cfg.nWays > 1) l1_plru.way(r_idx) else 0.U)
+    if (cfg.nWays > 1)
+      MuxLookup(ways_log2, 0.U(waysBits.W))((1 to waysBits).map(k =>
+        k.U -> (0.U(waysBits.W) | plru_logic.get_replace_way(plru_state((1 << k) - 2, 0), 1 << k))))
+    else 0.U
+  // Inactive ways count as valid, so a fill never takes one.
+  val r_valid = entries(r_idx).map(_.valid).asUInt | ~way_mask
   val repl_way =
     if (cfg.nWays > 1)
       Mux(
-        entries(r_idx).map(_.valid).asUInt.andR,
+        r_valid.andR,
         candidate_repl_way,
-        OHToUInt(PriorityEncoderOH(~entries(r_idx).map(_.valid).asUInt))
+        OHToUInt(PriorityEncoderOH(~r_valid))
       )
     else 0.U
 
@@ -329,6 +355,7 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   l1_plru.access(
     Seq(hid_set, r_idx),
     Seq(Pipe(plru_hit, OHToUInt(real_hits), 0), Pipe(plru_fill, repl_way, 0)))
+  when(geom_changed) { l1_plru.state_vec.foreach(_ := 0.U) }
 
   switch(state) {
 
@@ -549,6 +576,12 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
   // ------------------------------------------------------------------------------------------------
 
   // Reset
+  when(geom_changed) {
+    entries.foreach(_.foreach(_.invalidate()))
+    midas.targetutils.SynthesizePrintf(
+      printf("HTLB.geom: cycle=%d sets_log2=%d ways_log2=%d\n", timeline.cycle, sets_log2, ways_log2)
+    )
+  }
   when(reset.asBool || io.clear_htlb) {
     entries.foreach(_.foreach(_.invalidate()))
     ht_directory_cache.foreach(_.foreach(_.valid := false.B))
@@ -569,7 +602,8 @@ class HTLBSimple(cfg: HTLBConfig)(implicit p: Parameters)
       entries.foreach(_.foreach(_.invalidate()))
       ht_directory_cache.foreach(_.foreach(_.valid := false.B))
     }.otherwise {
-      val (e_tag, e_idx) = Split(io.htInval, idxBits)
+      val e_tag = io.htInval
+      val e_idx = setOf(io.htInval)
       for (e <- entries(e_idx)) {
         when(e_tag === e.tag) {
           e.invalidate()

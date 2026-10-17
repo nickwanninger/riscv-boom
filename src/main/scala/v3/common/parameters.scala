@@ -183,9 +183,21 @@ class BoomCustomCSRs(implicit p: Parameters) extends freechips.rocketchip.tile.C
     Some(CustomCSR(handleTracingCSRId,  (BigInt(1) << 64) - 1, Some(BigInt(0x00000000L))))
   }
 
+  // Active HTLB geometry: bits 3:0 = log2(ways), bits 11:8 = log2(sets).
+  // The reset value is the built geometry. The HTLB clamps larger values to it.
+  // Use tileParams, not boomParams: decls is called before the trait vals are set.
+  def htlbGeomCSRId = 0xc8
+  def htlbGeomCSR = {
+    val params = tileParams.core.asInstanceOf[BoomCoreParams]
+    val init = log2Ceil(params.nL1HTLBSets) << 8 | log2Ceil(params.nL1HTLBWays)
+    Some(CustomCSR(htlbGeomCSRId, BigInt(0xf0f), Some(BigInt(init))))
+  }
+  def htlbGeom = getOrElse(htlbGeomCSR, _.value, 0.U(xLen.W))
+
   def disableOOO = getOrElse(chickenCSR, _.value(3), true.B)
   def marchid = CustomCSR.constant(CSRs.marchid, BigInt(2))
-  override def decls: Seq[CustomCSR] = super.decls :+ marchid
+  // Append only: core.scala indexes customCSRs by position.
+  override def decls: Seq[CustomCSR] = (super.decls :+ marchid) ++ htlbGeomCSR
 }
 
 /**

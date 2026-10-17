@@ -160,6 +160,7 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
   val htDump = Input(UInt(xLen.W))
   val htInval = Input(UInt(xLen.W))
   val htSize = Input(UInt(xLen.W))
+  val htlbGeom = Input(UInt(xLen.W))
   val clear_htlb = Input(Bool())
   val htInvald = Output(Bool())
 }
@@ -319,6 +320,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   htlb.io.htInval <> io.core.htInval
   htlb.io.htBase <> io.core.htBase
   htlb.io.clear_htlb := io.core.clear_htlb
+  htlb.io.geom := io.core.htlbGeom
   io.core.htInvald := htlb.io.htInvald
 
   val htlb_enabled = (ENABLE_HTLB > 0).B && io.core.htBase.orR && (((io.core.status.dprv + 1.U) <= ENABLE_HTLB.U) || (io.core.htDump.orR))

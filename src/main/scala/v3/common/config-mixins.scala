@@ -164,6 +164,17 @@ class WithBoomA72TLBsAndL1D extends Config((site, here, up) => {
 })
 
 /**
+ * Set the built L1 HTLB geometry. The htlbGeom CSR can only make it smaller at run time.
+ */
+class WithBoomHTLBGeometry(nSets: Int, nWays: Int) extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(
+      core = tp.tileParams.core.copy(nL1HTLBSets = nSets, nL1HTLBWays = nWays)))
+    case other => other
+  }
+})
+
+/**
  * 1-wide BOOM.
  */
 class WithNSmallBooms(n: Int = 1) extends Config(
