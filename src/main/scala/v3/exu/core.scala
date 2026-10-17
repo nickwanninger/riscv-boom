@@ -1427,6 +1427,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.lsu.htDump := custom_csrs.htDump
   io.lsu.htInval := custom_csrs.htInval
   io.lsu.htSize := custom_csrs.htSize
+  io.lsu.htlbGeom := custom_csrs.htlbGeom
 
   val printed_handle_tracing = RegInit(false.B)
   val prev_handle_tracing = RegNext(custom_csrs.handleTracing)
